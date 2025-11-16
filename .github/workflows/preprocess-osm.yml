@@ -1,12 +1,12 @@
 name: OSM Tile Preprocessor
 
 on:
-  workflow_dispatch: {}          # manual trigger
+  workflow_dispatch: {}
   schedule:
-    - cron: '0 2 * * *'          # daily at 02:00 UTC (adjust if you want)
+    - cron: '0 2 * * *'
   push:
     paths:
-      - 'regions/**'            # update regions triggers a run
+      - 'regions/**'
 
 jobs:
   build-and-run:
@@ -22,22 +22,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Decode Firebase service account
-        env:
-          FIREBASE_SA_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_B64 }}
-        run: |
-          if [ -z "$FIREBASE_SA_B64" ]; then
-            echo "Set FIREBASE_SERVICE_ACCOUNT_B64 secret (base64 encoded service account JSON)."
-            exit 1
-          fi
-          echo "$FIREBASE_SA_B64" | base64 --decode > ./firebase-service-account.json
-          ls -l firebase-service-account.json
-
       - name: Run preprocessor
         env:
           OVERPASS_ENDPOINT: "https://overpass-api.de/api/interpreter"
-          FIREBASE_BUCKET: ${{ secrets.FIREBASE_BUCKET }}         # e.g. your-project.appspot.com
           TILE_ZOOM: "15"
           THROTTLE_MS: "1200"
         run: |
           node preprocess_osm.js
+
+      - name: Commit tiles to gh-pages
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+
+          git clone --depth 1 https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} repo
+          cd repo
+          git checkout gh-pages || git checkout --orphan gh-pages
+
+          git rm -rf tiles || echo "No old tiles"
+
+          mkdir -p tiles
+          cp -R ../out/tiles/* tiles/
+
+          git add -A
+          git commit -m "Update tiles from GH Action" || echo "No changes to commit"
+          git push -f https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} gh-pages
