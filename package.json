@@ -6,7 +6,6 @@
     "start": "node preprocess_osm.js"
   },
   "dependencies": {
-    "@google-cloud/storage": "^7.0.0",
     "node-fetch": "^2.6.7"
   }
 }
