@@ -14,6 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "actions@github.com"
+
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
@@ -30,22 +35,19 @@ jobs:
         run: |
           node preprocess_osm.js
 
-      - name: Commit tiles to gh-pages
+      - name: Publish tiles to gh-pages
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-
           git clone --depth 1 https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} repo
           cd repo
+
           git checkout gh-pages || git checkout --orphan gh-pages
-
-          git rm -rf tiles || echo "No old tiles"
-
           mkdir -p tiles
+          rm -rf tiles/* || true
+
           cp -R ../out/tiles/* tiles/
 
           git add -A
           git commit -m "Update tiles from GH Action" || echo "No changes to commit"
-          git push -f https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} gh-pages
+          git push -f origin gh-pages
