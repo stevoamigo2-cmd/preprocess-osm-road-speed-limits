@@ -1,0 +1,43 @@
+name: OSM Tile Preprocessor
+
+on:
+  workflow_dispatch: {}          # manual trigger
+  schedule:
+    - cron: '0 2 * * *'          # daily at 02:00 UTC (adjust if you want)
+  push:
+    paths:
+      - 'regions/**'            # update regions triggers a run
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Decode Firebase service account
+        env:
+          FIREBASE_SA_B64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_B64 }}
+        run: |
+          if [ -z "$FIREBASE_SA_B64" ]; then
+            echo "Set FIREBASE_SERVICE_ACCOUNT_B64 secret (base64 encoded service account JSON)."
+            exit 1
+          fi
+          echo "$FIREBASE_SA_B64" | base64 --decode > ./firebase-service-account.json
+          ls -l firebase-service-account.json
+
+      - name: Run preprocessor
+        env:
+          OVERPASS_ENDPOINT: "https://overpass-api.de/api/interpreter"
+          FIREBASE_BUCKET: ${{ secrets.FIREBASE_BUCKET }}         # e.g. your-project.appspot.com
+          TILE_ZOOM: "15"
+          THROTTLE_MS: "1200"
+        run: |
+          node preprocess_osm.js
