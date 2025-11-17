@@ -48,7 +48,16 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const filteredPbf = path.join(__dirname, path.basename(PBF_FILE, path.extname(PBF_FILE)) + '.filtered.pbf');
 console.log('Filtering PBF to ways with highway or maxspeed tags (creates):', filteredPbf);
 try {
-  const res = spawnSync('osmium', ['tags-filter', PBF_FILE, 'w/highway', 'w/maxspeed', '-o', filteredPbf, '--add-missing-nodes'], { stdio: 'inherit' });
+  const res = spawnSync('osmium', [
+  'tags-filter',
+  PBF_FILE,
+  'w/highway',
+  'w/maxspeed',
+  '-o',
+  filteredPbf,
+  '--add-missing-nodes'
+], { stdio: 'inherit' });
+
   if (res.status !== 0) throw new Error('osmium tags-filter failed with status ' + res.status);
 } catch (err) {
   console.error('Failed to run osmium tags-filter. Ensure osmium-tool installed and on PATH.');
