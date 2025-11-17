@@ -31,7 +31,7 @@ jobs:
 
       - name: Commit tiles to gh-pages
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ secrets.GH_PAT2 }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "actions@github.com"
