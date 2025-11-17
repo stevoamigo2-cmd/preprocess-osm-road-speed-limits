@@ -30,11 +30,10 @@ jobs:
 
       - name: Generate tile list for route
         run: |
-          node tools/generate_tiles_route_buffer.js \
-            --points=regions/route_points.json \
-            --zoom=13 \
-            --buffer=400 \
-            --out=regions/tiles.json
+          node tools/generate_tiles_bbox.js \
+          --bbox=49.8,-8.6,60.9,1.8 \
+          --zoom=13 \
+          --out=regions/tiles.json
 
       - name: Run OSM Preprocess (Zoom 13)
         env:
