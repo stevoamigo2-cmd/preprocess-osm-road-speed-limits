@@ -172,9 +172,16 @@ osmium.on('close', code => {
     } catch(e){ console.warn('Failed converting ndjson for', tkey, e && e.message); }
   }
 
-  const summary = { timestamp: new Date().toISOString(), strategy: { usedPbfForExport }, totals: { totalFeatures, processedFeatures, skippedNoGeom, skippedBadGeom, touchedTiles: touchedTiles.size }, sampleTiles };
-  fs.writeFileSync(path.join(__dirname, 'out', 'generate_summary.json'), JSON.stringify(summary, null, 2));
-  console.log('Wrote out/generate_summary.json');
+ const summary = {
+  timestamp: new Date().toISOString(),
+  strategy: { triedAddMissingNodes, usePbfForExport, exportArgs: exportCmdArgs },
+  totals: { totalFeatures, processedFeatures, skippedNoGeom, skippedBadGeom, touchedTiles: touchedTiles.size },
+  sampleTiles,
+};
+
+fs.writeFileSync(path.join(__dirname, 'out', 'generate_summary.json'), JSON.stringify(summary, null, 2));
+console.log('Wrote out/generate_summary.json');
+
 
   try { if (fs.existsSync(withNodesPbf)) fs.unlinkSync(withNodesPbf); } catch(e){}
   console.log('Done. Tiles in out/tiles/' + ZOOM);
