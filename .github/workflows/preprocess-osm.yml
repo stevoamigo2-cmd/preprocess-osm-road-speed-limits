@@ -22,7 +22,6 @@ jobs:
           sudo apt-get install -y osmium-tool
           osmium --version
 
-
       - name: Install dependencies
         run: npm install
 
@@ -30,9 +29,23 @@ jobs:
         run: |
           curl -L -o uk_highways_max.osm.pbf https://github.com/stevoamigo2-cmd/preprocess-osm-road-speed-limits/releases/download/v1.0.0/uk_highways_max.osm.pbf
 
+      - name: Filter ways and reconstruct way-node geometry
+        run: |
+          FILTERED_PBF=uk_highways_max.filtered.pbf
+          WITHNODES_PBF=uk_highways_max.withnodes.pbf
+
+          # Try --add-missing-nodes (newer osmium)
+          if osmium tags-filter --help | grep -q -- '--add-missing-nodes'; then
+            echo "Using --add-missing-nodes"
+            osmium tags-filter uk_highways_max.osm.pbf w/highway w/maxspeed -o $WITHNODES_PBF --add-missing-nodes
+          else
+            echo "--add-missing-nodes not supported, using add-locations"
+            osmium tags-filter uk_highways_max.osm.pbf w/highway w/maxspeed -o $FILTERED_PBF
+            osmium add-locations $FILTERED_PBF -o $WITHNODES_PBF
+          fi
 
       - name: Generate tiles from local PBF (NO OVERPASS)
-        run: node generate_tiles_from_pbf.js uk_highways_max.osm.pbf
+        run: node generate_tiles_from_pbf.js uk_highways_max.withnodes.pbf
 
       - name: Publish tiles to gh-pages
         env:
