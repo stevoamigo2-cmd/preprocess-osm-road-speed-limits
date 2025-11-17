@@ -128,7 +128,7 @@ if (didFilter && triedAddMissingNodes) {
 } else {
   // try osmium add-locations (some versions provide it)
   console.log('2) Attempting to reconstruct way geometry with osmium add-locations ->', withNodesPbf);
-  res = runSync('osmium', ['add-locations', filteredPbf, '-o', withNodesPbf]);
+  res = runSync('osmium', ['add-locations-to-ways', filteredPbf, '-o', withNodesPbf]);
   if (res.status === 0) {
     console.log('osmium add-locations succeeded.');
     usePbfForExport = withNodesPbf;
