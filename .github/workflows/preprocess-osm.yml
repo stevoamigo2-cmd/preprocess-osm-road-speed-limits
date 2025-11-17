@@ -24,16 +24,11 @@ jobs:
 
       # 4️⃣ Install osmium-tool (from official Ubuntu repo)
       # 4️⃣ Install latest osmium-tool from PPA
-      - name: Install osmium-tool from source
+      - name: Install osmium-tool
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git cmake g++ libboost-all-dev libexpat1-dev zlib1g-dev
-          git clone https://github.com/osmcode/osmium-tool.git
-          cd osmium-tool
-          mkdir build && cd build
-          cmake ..
-          make
-          sudo make install
+            sudo apt-get update
+            sudo apt-get install -y osmium-tool
+
 
 
 
