@@ -1,96 +1,38 @@
-name: Preprocess OSM Tiles
+name: OSM Tile Preprocessor
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 0 * * 0" # weekly Sunday
-
-permissions:
-  contents: write
+  workflow_dispatch: {}
 
 jobs:
-  build:
+  build-and-run:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Install dependencies
+        run: npm install
+
+      - name: Download UK PBF (optional)
         run: |
-          if [ -f package.json ]; then npm install; fi
+          curl -L -o uk_highways_max.osm.pbf https://download.geofabrik.de/europe/great-britain-latest.osm.pbf
+          osmium tags-filter uk_highways_max.osm.pbf w/highway w/maxspeed -o uk_highways_max.osm.pbf
 
-      - name: Generate tile list for route (if needed)
-        run: |
-          if [ -f regions/route_points.json ]; then
-            node tools/generate_tiles_bbox.js \
-            --bbox=-8.649357,49.864716,1.766947,60.859073 \
-            --zoom=13 \
-            --out=regions/tiles.json
+      - name: Generate tiles from PBF
+        run: node generate_tiles_from_pbf.js 13
 
-          else
-            echo "No route_points.json found; skipping tile generation"
-          fi
-
-      - name: Run OSM Preprocess in batches
+      - name: Commit tiles to gh-pages
         env:
-          OVERPASS_ENDPOINT: "https://overpass-api.de/api/interpreter"
-          THROTTLE_MS: "5000"
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          node -e "
-          const fs = require('fs');
-          const path = require('path');
-          const { execSync } = require('child_process');
-
-          const TILE_Z = 13;
-          const BATCH_SIZE = 1000;
-          const tilesFile = path.join('regions', 'tiles.json');
-
-          if (!fs.existsSync(tilesFile)) {
-            console.error('regions/tiles.json not found!');
-            process.exit(1);
-          }
-
-          const allTiles = JSON.parse(fs.readFileSync(tilesFile, 'utf8'));
-          console.log('Total tiles:', allTiles.length);
-
-          for (let i = 0; i < allTiles.length; i += BATCH_SIZE) {
-            const batch = allTiles.slice(i, i + BATCH_SIZE);
-            fs.writeFileSync('regions/tiles_batch.json', JSON.stringify(batch, null, 2));
-            console.log('Processing batch', i/BATCH_SIZE + 1);
-
-            // Run preprocess_osm.js on this batch
-            execSync('node preprocess_osm.js ' + TILE_Z, { stdio: 'inherit' });
-          }
-          "
-
-      - name: Prepare gh-pages branch and commit tiles
-        run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-
-          if git show-ref --verify --quiet refs/heads/gh-pages; then
-            git switch gh-pages
-          else
-            git switch --create gh-pages
-          fi
-
-          rm -rf tiles
-          mkdir -p tiles
-          if [ -d out/tiles ]; then
-            cp -R out/tiles/* tiles/ || true
-          else
-            echo "No out/tiles directory - nothing to copy."
-          fi
-
-          git add -A
-          git commit -m 'Update tiles z13 from GH Action' || echo 'No changes'
-          git push --force origin gh-pages
+          git config user.email "actions@github.com"
+          git checkout --orphan gh-pages || git checkout gh-pages
+          git rm -rf tiles || echo "No old tiles"
+          git add -A tiles
+          git commit -m "Update tiles from PBF" || echo "No changes to commit"
+          git push -f https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} gh-pages
