@@ -23,10 +23,14 @@ jobs:
         run: npm install
 
       # 4️⃣ Install osmium-tool (from official Ubuntu repo)
+      # 4️⃣ Install latest osmium-tool from PPA
       - name: Install osmium-tool
         run: |
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:osmcode/osmium-tool
           sudo apt-get update
           sudo apt-get install -y osmium-tool
+
 
       # 5️⃣ Download PBF
       - name: Download PBF
