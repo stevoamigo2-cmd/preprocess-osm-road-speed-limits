@@ -1,4 +1,4 @@
-// overwrite generate_tiles_from_pbf.js with this file
+// generate_tiles_from_pbf.js - more defensive geometry extraction + debug
 const fs = require('fs');
 const path = require('path');
 const { spawnSync, spawn } = require('child_process');
@@ -50,7 +50,7 @@ const filteredPbf = path.join(__dirname, baseName + '.filtered.pbf');
 const withNodesPbf = path.join(__dirname, baseName + '.filtered.withnodes.pbf');
 
 console.log('1) Filtering PBF to ways with highway or maxspeed tags (creates):', filteredPbf);
-// 1) tags-filter -> produce filteredPbf (ways only)
+// tags-filter -> produce filteredPbf (ways only)
 try {
   const res = spawnSync('osmium', [
     'tags-filter',
@@ -70,7 +70,7 @@ try {
 }
 
 console.log('2) Reconstructing way-node geometry (add locations to ways) ->', withNodesPbf);
-// 2) add-locations-to-ways to ensure ways have node coordinates
+// add-locations-to-ways to ensure ways have node coordinates
 try {
   const res2 = spawnSync('osmium', [
     'add-locations-to-ways',
@@ -88,7 +88,7 @@ try {
 }
 
 console.log('3) Streaming export from osmium -> geojsonseq (processing features)...');
-// 3) export to geojsonseq and stream-process it
+// export geojsonseq
 const osmium = spawn('osmium', ['export', withNodesPbf, '-f', 'geojsonseq'], { stdio: ['ignore', 'pipe', 'inherit'] });
 
 let buffer = '';
@@ -97,96 +97,158 @@ let firstFeatureLogged = false;
 const touchedTiles = new Set();
 const sampleTiles = [];
 
+function safeParseJSON(str) {
+  try { return JSON.parse(str); } catch (e) { return null; }
+}
+
+function coordsFromPropsNodes(props) {
+  // try common props that may contain coordinates: nodes, coordinates, geometry (string)
+  if (!props) return null;
+  // 1) nodes array with lat/lon objects
+  if (Array.isArray(props.nodes) && props.nodes.length) {
+    const out = [];
+    for (const n of props.nodes) {
+      if (n && typeof n.lat === 'number' && typeof n.lon === 'number') out.push([n.lat, n.lon]);
+      else if (Array.isArray(n) && n.length >= 2) out.push([n[0], n[1]]);
+    }
+    if (out.length) return out;
+  }
+  // 2) geometry stringified JSON
+  if (typeof props.geometry === 'string' && props.geometry.trim().startsWith('{')) {
+    const parsed = safeParseJSON(props.geometry);
+    if (parsed && parsed.type && parsed.coordinates) {
+      // parse same as geometry block below
+      return coordsFromGeo(parsed);
+    }
+  }
+  // 3) coordinates field (array)
+  if (Array.isArray(props.coordinates) && props.coordinates.length) {
+    const out = [];
+    for (const pt of props.coordinates) {
+      if (Array.isArray(pt) && pt.length >= 2) {
+        // assume [lon,lat]
+        out.push([pt[1], pt[0]]);
+      }
+    }
+    if (out.length) return out;
+  }
+  return null;
+}
+
+function coordsFromGeo(geom) {
+  try {
+    if (!geom || !geom.type) return null;
+    if (geom.type === 'LineString' && Array.isArray(geom.coordinates)) {
+      return geom.coordinates.map(pt => [pt[1], pt[0]]).filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    } else if (geom.type === 'MultiLineString' && Array.isArray(geom.coordinates)) {
+      const out = [];
+      for (const line of geom.coordinates) {
+        for (const pt of line) {
+          if (Array.isArray(pt) && pt.length >= 2) out.push([pt[1], pt[0]]);
+        }
+      }
+      return out.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    } else if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
+      const out = [];
+      for (const g of geom.geometries) {
+        const sub = coordsFromGeo(g);
+        if (sub) out.push(...sub);
+      }
+      return out;
+    } else if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
+      return [[geom.coordinates[1], geom.coordinates[0]]];
+    }
+  } catch (e) {
+    return null;
+  }
+  return null;
+}
+
+function extractCoords(feat) {
+  if (!feat) return null;
+  // Prefer explicit geometry property
+  if (feat.geometry) {
+    const got = coordsFromGeo(feat.geometry);
+    if (got && got.length) return got;
+  }
+  // Try properties nodes / geometry
+  if (feat.properties) {
+    const got = coordsFromPropsNodes(feat.properties);
+    if (got && got.length) return got;
+  }
+  // As last resort: try to parse the whole feature for common shapes
+  const fstr = JSON.stringify(feat);
+  // try to find "coordinates": [...] quickly - but avoid heavy parsing here
+  // (we'll skip that optimization — rely on previous methods)
+  return null;
+}
+
 function flushBufferLines() {
   const lines = buffer.split(/\r?\n/);
   buffer = lines.pop();
   for (const line of lines) {
     if (!line) continue;
     totalFeatures++;
-    try {
-      const feat = JSON.parse(line);
-      if (!firstFeatureLogged) {
-        // write a sample for inspection
-        try {
-          fs.mkdirSync(path.join(__dirname, 'out'), { recursive: true });
-          fs.writeFileSync(path.join(__dirname, 'out', 'sample_first_feature.json'), JSON.stringify(feat, null, 2));
-          console.log('WROTE out/sample_first_feature.json for inspection');
-        } catch (e) { /* ignore */ }
-        firstFeatureLogged = true;
-      }
-      processFeature(feat);
-    } catch (e) {
-      // parsing failed: count as skipped
-      skippedBadGeom++;
+    const feat = safeParseJSON(line);
+    if (!feat) { skippedBadGeom++; continue; }
+    if (!firstFeatureLogged) {
+      try {
+        fs.mkdirSync(path.join(__dirname, 'out'), { recursive: true });
+        fs.writeFileSync(path.join(__dirname, 'out', 'sample_first_feature.json'), JSON.stringify(feat, null, 2));
+        console.log('WROTE out/sample_first_feature.json for inspection');
+      } catch (e) { /* ignore */ }
+      firstFeatureLogged = true;
     }
+    processFeature(feat);
   }
 }
 
 function processFeature(feat) {
-  if (!feat || feat.type !== 'Feature' || !feat.geometry) { skippedNoGeom++; return; }
+  // require Feature
+  if (!feat || feat.type !== 'Feature') { skippedBadGeom++; return; }
 
-  const props = feat.properties || {};
-  // detect tags in several possible places
-  let tags = props.tags || props.tag || null;
+  const tagsFromProps = feat.properties || {};
+  // tags may be nested in properties.tags or similar
+  let tags = tagsFromProps.tags || tagsFromProps.tag || null;
   if (!tags) {
-    // sometimes osmium flattens tags into properties
+    // flatten typical tag-like strings present as properties
     tags = {};
-    for (const k of Object.keys(props)) {
-      if (['id','@id','osm','type','timestamp','version'].includes(k)) continue;
-      const v = props[k];
+    for (const k of Object.keys(tagsFromProps)) {
+      if (['id','@id','type','timestamp','version'].includes(k)) continue;
+      const v = tagsFromProps[k];
       if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') tags[k] = v;
     }
     if (Object.keys(tags).length === 0) tags = null;
   }
 
-  const maxspeedRaw = tags && (tags.maxspeed || tags['maxspeed']) ? (tags.maxspeed || tags['maxspeed']) : (props.maxspeed || props['maxspeed'] || null);
-  const highwayTag = tags && (tags.highway || tags['highway']) ? (tags.highway || tags['highway']) : (props.highway || props['highway'] || null);
+  const maxspeedRaw = (tags && (tags.maxspeed || tags['maxspeed'])) ? (tags.maxspeed || tags['maxspeed']) : (tagsFromProps.maxspeed || tagsFromProps['maxspeed'] || null);
+  const highwayTag = (tags && (tags.highway || tags['highway'])) ? (tags.highway || tags['highway']) : (tagsFromProps.highway || tagsFromProps['highway'] || null);
   const mph = parseMaxspeedToMph(maxspeedRaw);
 
-  // build coords list robustly (support varied geojson forms)
-  const geom = feat.geometry;
-  const coords = [];
+  // extract coordinates
+  const coords = extractCoords(feat);
+  if (!coords || !coords.length) { skippedBadGeom++; return; }
 
-  try {
-    if (geom.type === 'LineString') {
-      for (const pt of geom.coordinates) {
-        if (!Array.isArray(pt) || pt.length < 2) continue;
-        // geojson coords are [lon,lat]
-        coords.push([pt[1], pt[0]]);
-      }
-    } else if (geom.type === 'MultiLineString') {
-      for (const line of geom.coordinates) for (const pt of line) coords.push([pt[1], pt[0]]);
-    } else if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
-      for (const g of geom.geometries) {
-        if (g && g.type === 'LineString') for (const pt of g.coordinates) coords.push([pt[1], pt[0]]);
-      }
-    } else {
-      skippedBadGeom++;
-      return;
-    }
-  } catch (e) {
-    skippedBadGeom++;
-    return;
-  }
+  // dedupe and ensure numeric
+  const cleanCoords = coords.filter(p => Array.isArray(p) && p.length >= 2 && isFinite(p[0]) && isFinite(p[1]));
 
-  if (!coords.length) { skippedNoGeom++; return; }
+  if (!cleanCoords.length) { skippedNoGeom++; return; }
 
   // get unique tiles for this feature
   const tilesTouched = new Set();
-  for (const p of coords) {
+  for (const p of cleanCoords) {
     const lat = p[0], lon = p[1];
-    if (!isFinite(lat) || !isFinite(lon)) continue;
     const [tx, ty] = lonLatToTileXY(lon, lat, ZOOM);
     tilesTouched.add(`${tx},${ty}`);
   }
   if (tilesTouched.size === 0) { skippedNoGeom++; return; }
 
   const small = {
-    id: props.id || props['@id'] || (props.osm && props.osm.id) || null,
+    id: tagsFromProps.id || tagsFromProps['@id'] || (tagsFromProps.osm && tagsFromProps.osm.id) || null,
     speed: (mph > 0 ? mph : null),
     highway: highwayTag || null,
     tags: { maxspeed: maxspeedRaw || null },
-    coords
+    coords: cleanCoords
   };
   const smallLine = JSON.stringify(small) + '\n';
 
@@ -205,8 +267,8 @@ function processFeature(feat) {
 
 osmium.stdout.on('data', (chunk) => {
   buffer += chunk.toString('utf8');
-  // process in chunks to avoid unbounded memory growth
-  if (buffer.length > 1 << 22) { // ~4MB
+  // periodically flush to avoid unbounded memory use
+  if (buffer.length > (1 << 22)) { // ~4MiB chunk
     flushBufferLines();
   } else {
     flushBufferLines();
@@ -214,11 +276,11 @@ osmium.stdout.on('data', (chunk) => {
 });
 
 osmium.on('close', (code) => {
-  // process any remaining buffered line
   if (buffer && buffer.trim()) {
-    const lines = buffer.split(/\r?\n/).filter(Boolean);
-    for (const line of lines) {
-      try { processFeature(JSON.parse(line)); } catch (e) {}
+    const remaining = buffer.split(/\r?\n/).filter(Boolean);
+    for (const line of remaining) {
+      const feat = safeParseJSON(line);
+      if (feat) processFeature(feat);
     }
   }
 
@@ -235,7 +297,6 @@ osmium.on('close', (code) => {
 
   if (touchedTiles.size === 0) {
     console.warn('No tiles were touched. Possible causes: filtered PBF has no way geometries OR feature geometry/tags are in an unexpected shape.');
-    console.log('Wrote sample_first_feature.json to out/ for inspection.');
     try {
       const stat = fs.statSync(filteredPbf);
       console.log('Filtered PBF size:', (stat.size / (1024*1024)).toFixed(1), 'MB');
@@ -272,13 +333,12 @@ osmium.on('close', (code) => {
     sampleTiles,
   };
   try {
+    fs.mkdirSync(path.join(__dirname, 'out'), { recursive: true });
     fs.writeFileSync(path.join(__dirname, 'out', 'generate_summary.json'), JSON.stringify(summary, null, 2));
     console.log('Wrote out/generate_summary.json');
-  } catch (e) { /* ignore */ }
-
-  // cleanup filtered files (optional)
+  } catch (e) {}
+  // cleanup
   try { fs.unlinkSync(filteredPbf); } catch (e) {}
   try { fs.unlinkSync(withNodesPbf); } catch (e) {}
-
   console.log('Done. Tiles in out/tiles/' + ZOOM);
 });
