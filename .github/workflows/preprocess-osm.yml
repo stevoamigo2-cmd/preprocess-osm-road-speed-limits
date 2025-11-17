@@ -15,6 +15,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install osmium-tool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y osmium-tool
+
       - name: Install dependencies
         run: npm install
 
