@@ -1,10 +1,9 @@
 /**
  * preprocess_osm.js
- * - expects:
- *   * regions/tiles.json -> array of { z: int, x: int, y: int }
- * - environment variables:
+ * - usage: node preprocess_osm.js [zoom]
+ * - expects: regions/tiles.json -> array of { z:int, x:int, y:int } (z will be overwritten)
+ * - env:
  *   * OVERPASS_ENDPOINT (default https://overpass-api.de/api/interpreter)
- *   * TILE_ZOOM
  *   * THROTTLE_MS
  */
 
@@ -24,7 +23,10 @@ if (!fs.existsSync(tilesFile)) {
   console.error('regions/tiles.json not found. Create an array like [{ "z":15,"x":17500,"y":11100 }, ...]');
   process.exit(1);
 }
-const tiles = JSON.parse(fs.readFileSync(tilesFile, 'utf8'));
+let tiles = JSON.parse(fs.readFileSync(tilesFile, 'utf8'));
+
+// Force all tiles to use TILE_Z to avoid mixed zoom confusion
+tiles.forEach(tile => tile.z = TILE_Z);
 
 // helper converts tile z/x/y to bbox (lat/lon)
 function tile2bbox(x, y, z) {
@@ -100,10 +102,14 @@ async function fetchTile(tile) {
       const res = await fetch(url, { headers: { 'User-Agent': 'preprocess-osm/1.0 (github actions)' } });
       if (!res.ok) {
         console.warn(`Overpass returned ${res.status} for tile z${z} x${x} y${y}`);
+        // if rate-limited, try small sleep and next query (we also continue to fallback)
         continue;
       }
       const json = await res.json();
-      if (!json.elements || json.elements.length === 0) continue;
+      if (!json.elements || json.elements.length === 0) {
+        // nothing for this query; try next (fallback)
+        continue;
+      }
 
       const features = [];
       for (const el of json.elements) {
@@ -130,33 +136,45 @@ async function fetchTile(tile) {
         features
       };
     } catch (e) {
-      console.warn('Overpass query failed, trying next fallback', e);
+      console.warn('Overpass query failed for tile', z, x, y, e && e.message ? e.message : e);
       await sleep(500);
       continue;
     }
   }
-  return null;
+
+  // no data found after both queries
+  return {
+    z, x, y,
+    tile_bbox: { south: s, west: w, north: n, east: e },
+    fetched_at: (new Date()).toISOString(),
+    features: []
+  };
 }
 
-async function saveTileJsonLocally(z, x, y, obj) {
-  const dir = path.join(__dirname, 'tiles', `${z}`, `${x}`);
+async function saveTileJsonOut(z, x, y, obj) {
+  const dir = path.join(__dirname, 'out', 'tiles', `${z}`, `${x}`);
   const filePath = path.join(dir, `${y}.json`);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(obj));
+  fs.writeFileSync(filePath, JSON.stringify(obj, null, 2));
   return filePath;
 }
 
 (async () => {
   console.log('Tiles to process:', tiles.length);
+  if (!tiles.length) {
+    console.log('No tiles defined in regions/tiles.json - exiting.');
+    process.exit(0);
+  }
+
   for (let i=0;i<tiles.length;i++) {
     const t = tiles[i];
     console.log(`Processing (${i+1}/${tiles.length}) z${t.z} x${t.x} y${t.y} ...`);
-    const obj = await fetchTile(t);
-    if (obj) {
-      const filePath = await saveTileJsonLocally(t.z, t.x, t.y, obj);
-      console.log('Saved tile', filePath);
-    } else {
-      console.log('No data for tile', t.z, t.x, t.y);
+    try {
+      const obj = await fetchTile(t);
+      const filePath = await saveTileJsonOut(t.z, t.x, t.y, obj);
+      console.log('Saved tile', filePath, 'features=', (obj.features ? obj.features.length : 0));
+    } catch (err) {
+      console.error('Failed processing tile', t, err && err.stack ? err.stack : err);
     }
     await sleep(THROTTLE_MS);
   }
