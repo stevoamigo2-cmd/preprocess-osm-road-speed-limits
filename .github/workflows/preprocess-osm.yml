@@ -15,24 +15,25 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install archiver
 
-      - name: Download UK PBF (optional)
+      - name: Upload UK PBF (if small) or skip if already present
         run: |
-          curl -L -o uk_highways_max.osm.pbf https://download.geofabrik.de/europe/great-britain-latest.osm.pbf
-          osmium tags-filter uk_highways_max.osm.pbf w/highway w/maxspeed -o uk_highways_max.osm.pbf
+          if [ ! -f uk_highways_max.osm.pbf ]; then
+            curl -L -o uk_highways_max.osm.pbf https://download.geofabrik.de/europe/great-britain-latest.osm.pbf
+          fi
 
-      - name: Generate tiles from PBF
+      - name: Generate tiles and zip
         run: node generate_tiles_from_pbf.js 13
 
-      - name: Commit tiles to gh-pages
+      - name: Commit zip to gh-pages
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "actions@github.com"
           git checkout --orphan gh-pages || git checkout gh-pages
-          git rm -rf tiles || echo "No old tiles"
-          git add -A tiles
-          git commit -m "Update tiles from PBF" || echo "No changes to commit"
+          git rm -rf tiles_z*.zip || echo "No old zips"
+          git add tiles_z13.zip
+          git commit -m "Update tiles zip from PBF" || echo "No changes to commit"
           git push -f https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} gh-pages
