@@ -29,9 +29,11 @@ jobs:
           sudo apt-get install -y osmium-tool
 
       # 5️⃣ Generate tiles from PBF
-      - name: Generate tiles
+      - name: Download PBF
         run: |
-          node generate_tiles_from_pbf.js uk_highways_max.withnodes.pbf
+          curl -L -o uk_highways_max.osm.pbf https://github.com/stevoamigo2-cmd/preprocess-osm-road-speed-limits/releases/download/v1.0.0/uk_highways_max.osm.pbf
+          # If your script needs withnodes version, create it:
+          cp uk_highways_max.osm.pbf uk_highways_max.withnodes.pbf
 
       # 6️⃣ Configure git user for commits
       - name: Configure git
