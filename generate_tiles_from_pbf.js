@@ -26,6 +26,7 @@ function lonLatToTileXY(lon, lat, z) {
   const ytile = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * Math.pow(2, z));
   return [xtile, ytile];
 }
+
 function parseMaxspeedToMph(raw) {
   if (!raw) return -1;
   const s = String(raw).trim().toLowerCase();
@@ -49,8 +50,9 @@ function parseMaxspeedToMph(raw) {
 const OUT_DIR = path.join(__dirname, 'out', 'tiles', String(ZOOM));
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
-const filteredPbf = path.join(__dirname, path.basename(PBF_FILE, path.extname(PBF_FILE)) + '.filtered.pbf');
-const withNodesPbf = path.join(__dirname, path.basename(PBF_FILE, path.extname(PBF_FILE)) + '.filtered.withnodes.pbf');
+const baseName = path.basename(PBF_FILE, path.extname(PBF_FILE));
+const filteredPbf = path.join(__dirname, baseName + '.filtered.pbf');
+const withNodesPbf = path.join(__dirname, baseName + '.filtered.withnodes.pbf');
 
 function runSync(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, Object.assign({ stdio: 'pipe' }, opts));
@@ -63,9 +65,11 @@ let triedAddMissingNodes = false;
 let didFilter = false;
 let res;
 
+// Check osmium version
 res = runSync('osmium', ['--version']);
 if (res.status !== 0) console.warn('Warning: osmium-tool not found or not on PATH.');
 
+// Attempt old add-missing-nodes first (for backward compatibility)
 try {
   console.log(' -> attempt: osmium tags-filter ... --add-missing-nodes');
   triedAddMissingNodes = true;
@@ -82,6 +86,7 @@ try {
   else console.log('tags-filter + --add-missing-nodes failed (status ' + res.status + '), stderr:\n' + res.stderr);
 } catch (e) { console.log('tags-filter + --add-missing-nodes attempt raised:', e && e.message); }
 
+// Fallback without add-missing-nodes
 if (!didFilter) {
   try {
     console.log(' -> attempt: osmium tags-filter (without add-missing-nodes)');
@@ -106,7 +111,6 @@ if (!didFilter) {
 // === PATCHED: Use add-locations-to-ways instead of old add-locations ===
 let usePbfForExport = filteredPbf;
 if (!triedAddMissingNodes || !didFilter) {
-  // fallback: try add-locations-to-ways to reconstruct geometry
   console.log('2) Attempting to reconstruct way geometry with osmium add-locations-to-ways ->', withNodesPbf);
   res = runSync('osmium', ['add-locations-to-ways', filteredPbf, '-o', withNodesPbf]);
   if (res.status === 0) {
