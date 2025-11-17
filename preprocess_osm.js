@@ -13,7 +13,9 @@ const fetch = require('node-fetch');
 const path = require('path');
 
 const OVERPASS = process.env.OVERPASS_ENDPOINT || 'https://overpass-api.de/api/interpreter';
-const TILE_Z = parseInt(process.env.TILE_ZOOM || '15', 10);
+const TILE_Z = process.argv[2] ? parseInt(process.argv[2], 10) : 13;
+console.log("Generating tiles for zoom:", TILE_Z);
+
 const THROTTLE_MS = parseInt(process.env.THROTTLE_MS || '1200', 10);
 
 // read tiles list
