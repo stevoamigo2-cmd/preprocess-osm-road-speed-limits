@@ -45,19 +45,23 @@ function parseMaxspeedToMph(raw) {
 const OUT_DIR = path.join(__dirname, 'out', 'tiles', String(ZOOM));
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
-const filteredPbf = path.join(__dirname, path.basename(PBF_FILE, path.extname(PBF_FILE)) + '.filtered.pbf');
-console.log('Filtering PBF to ways with highway or maxspeed tags (creates):', filteredPbf);
+const baseName = path.basename(PBF_FILE, path.extname(PBF_FILE));
+const filteredPbf = path.join(__dirname, baseName + '.filtered.pbf');
+const withNodesPbf = path.join(__dirname, baseName + '.filtered.withnodes.pbf');
+
+console.log('1) Filtering PBF to ways with highway or maxspeed tags (creates):', filteredPbf);
+// 1) tags-filter -> produce filteredPbf (ways only)
 try {
   const res = spawnSync('osmium', [
-  'tags-filter',
-  PBF_FILE,
-  'w/highway',
-  'w/maxspeed',
-  '-o',
-  filteredPbf,
-  '--add-missing-nodes'
-], { stdio: 'inherit' });
+    'tags-filter',
+    PBF_FILE,
+    'w/highway',
+    'w/maxspeed',
+    '-o',
+    filteredPbf
+  ], { stdio: 'inherit' });
 
+  if (res.error) throw res.error;
   if (res.status !== 0) throw new Error('osmium tags-filter failed with status ' + res.status);
 } catch (err) {
   console.error('Failed to run osmium tags-filter. Ensure osmium-tool installed and on PATH.');
@@ -65,8 +69,27 @@ try {
   process.exit(3);
 }
 
-console.log('Streaming export from osmium -> geojsonseq (processing features)...');
-const osmium = spawn('osmium', ['export', filteredPbf, '-f', 'geojsonseq'], { stdio: ['ignore', 'pipe', 'inherit'] });
+console.log('2) Reconstructing way-node geometry (add locations to ways) ->', withNodesPbf);
+// 2) add-locations-to-ways to ensure ways have node coordinates
+try {
+  const res2 = spawnSync('osmium', [
+    'add-locations-to-ways',
+    filteredPbf,
+    '-o',
+    withNodesPbf
+  ], { stdio: 'inherit' });
+
+  if (res2.error) throw res2.error;
+  if (res2.status !== 0) throw new Error('osmium add-locations-to-ways failed with status ' + res2.status);
+} catch (err) {
+  console.error('Failed to run osmium add-locations-to-ways. Ensure osmium-tool installed and on PATH.');
+  console.error(err && err.message ? err.message : err);
+  process.exit(4);
+}
+
+console.log('3) Streaming export from osmium -> geojsonseq (processing features)...');
+// 3) export to geojsonseq and stream-process it
+const osmium = spawn('osmium', ['export', withNodesPbf, '-f', 'geojsonseq'], { stdio: ['ignore', 'pipe', 'inherit'] });
 
 let buffer = '';
 let totalFeatures = 0, processedFeatures = 0, skippedNoGeom = 0, skippedBadGeom = 0;
@@ -84,14 +107,17 @@ function flushBufferLines() {
       const feat = JSON.parse(line);
       if (!firstFeatureLogged) {
         // write a sample for inspection
-        fs.writeFileSync(path.join(__dirname, 'out', 'sample_first_feature.json'), JSON.stringify(feat, null, 2));
-        console.log('WROTE out/sample_first_feature.json for inspection');
+        try {
+          fs.mkdirSync(path.join(__dirname, 'out'), { recursive: true });
+          fs.writeFileSync(path.join(__dirname, 'out', 'sample_first_feature.json'), JSON.stringify(feat, null, 2));
+          console.log('WROTE out/sample_first_feature.json for inspection');
+        } catch (e) { /* ignore */ }
         firstFeatureLogged = true;
       }
       processFeature(feat);
     } catch (e) {
-      // parsing of this line failed
-      // count as skipped (rare)
+      // parsing failed: count as skipped
+      skippedBadGeom++;
     }
   }
 }
@@ -103,7 +129,7 @@ function processFeature(feat) {
   // detect tags in several possible places
   let tags = props.tags || props.tag || null;
   if (!tags) {
-    // sometimes osmium puts tags flattened as properties; detect common ones
+    // sometimes osmium flattens tags into properties
     tags = {};
     for (const k of Object.keys(props)) {
       if (['id','@id','osm','type','timestamp','version'].includes(k)) continue;
@@ -179,16 +205,23 @@ function processFeature(feat) {
 
 osmium.stdout.on('data', (chunk) => {
   buffer += chunk.toString('utf8');
-  flushBufferLines();
+  // process in chunks to avoid unbounded memory growth
+  if (buffer.length > 1 << 22) { // ~4MB
+    flushBufferLines();
+  } else {
+    flushBufferLines();
+  }
 });
 
 osmium.on('close', (code) => {
+  // process any remaining buffered line
   if (buffer && buffer.trim()) {
-    try {
-      const last = JSON.parse(buffer);
-      processFeature(last);
-    } catch (e) {}
+    const lines = buffer.split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      try { processFeature(JSON.parse(line)); } catch (e) {}
+    }
   }
+
   if (code !== 0) {
     console.error('osmium export exited with code', code);
     process.exit(4);
@@ -238,9 +271,14 @@ osmium.on('close', (code) => {
     totals: { totalFeatures, processedFeatures, skippedNoGeom, skippedBadGeom, touchedTiles: touchedTiles.size },
     sampleTiles,
   };
-  fs.writeFileSync(path.join(__dirname, 'out', 'generate_summary.json'), JSON.stringify(summary, null, 2));
-  console.log('Wrote out/generate_summary.json');
+  try {
+    fs.writeFileSync(path.join(__dirname, 'out', 'generate_summary.json'), JSON.stringify(summary, null, 2));
+    console.log('Wrote out/generate_summary.json');
+  } catch (e) { /* ignore */ }
 
+  // cleanup filtered files (optional)
   try { fs.unlinkSync(filteredPbf); } catch (e) {}
+  try { fs.unlinkSync(withNodesPbf); } catch (e) {}
+
   console.log('Done. Tiles in out/tiles/' + ZOOM);
 });
