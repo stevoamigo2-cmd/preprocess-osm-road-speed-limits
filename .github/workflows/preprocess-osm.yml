@@ -41,11 +41,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # 7️⃣ Commit and push generated tiles to gh-pages branch
-      - name: Commit and push tiles
+      # 7️⃣ Commit and push generated tiles safely
+      - name: Commit tiles
         run: |
           git checkout -B gh-pages || git checkout gh-pages
-          git add out/tiles
-          git add out/generate_summary.json
-          git commit -m "Updated tiles from offline PBF" || echo "No changes to commit"
-          git push -u origin gh-pages --force
+          if [ -f out/generate_summary.json ]; then
+            git add out/generate_summary.json out/tiles
+            git commit -m "Update tiles from offline PBF"
+            git push origin gh-pages --force
+          else
+            echo "No output files to commit, skipping Git commit"
+          fi
