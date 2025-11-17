@@ -1,75 +1,49 @@
 name: Generate OSM Speed Tiles (Offline PBF)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # 1️⃣ Checkout repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Use Node.js
-        uses: actions/setup-node@v4
+      # 2️⃣ Set up Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: 20
 
+      # 3️⃣ Install npm dependencies
+      - name: Install npm packages
+        run: npm install
+
+      # 4️⃣ Install osmium-tool (from official Ubuntu repo)
       - name: Install osmium-tool
         run: |
           sudo apt-get update
           sudo apt-get install -y osmium-tool
-          osmium --version
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Download PBF
+      # 5️⃣ Generate tiles from PBF
+      - name: Generate tiles
         run: |
-          curl -L -o uk_highways_max.osm.pbf https://github.com/stevoamigo2-cmd/preprocess-osm-road-speed-limits/releases/download/v1.0.0/uk_highways_max.osm.pbf
+          node generate_tiles_from_pbf.js uk_highways_max.withnodes.pbf
 
-      - name: Filter ways and reconstruct way-node geometry
-        run: |
-          FILTERED_PBF=uk_highways_max.filtered.pbf
-          WITHNODES_PBF=uk_highways_max.withnodes.pbf
-
-          # Try --add-missing-nodes (newer osmium)
-          if osmium tags-filter --help | grep -q -- '--add-missing-nodes'; then
-            echo "Using --add-missing-nodes"
-            osmium tags-filter uk_highways_max.osm.pbf w/highway w/maxspeed -o $WITHNODES_PBF --add-missing-nodes
-          else
-            echo "--add-missing-nodes not supported, using add-locations-to-ways"
-            osmium tags-filter uk_highways_max.osm.pbf w/highway w/maxspeed -o $FILTERED_PBF
-            if osmium add-locations-to-ways --help >/dev/null 2>&1; then
-              osmium add-locations-to-ways $FILTERED_PBF -o $WITHNODES_PBF
-            else
-              echo "osmium add-locations-to-ways not available; using filtered PBF as-is"
-              cp $FILTERED_PBF $WITHNODES_PBF
-            fi
-          fi
-
-      - name: Generate tiles from local PBF
-        run: node generate_tiles_from_pbf.js uk_highways_max.withnodes.pbf
-
-      - name: Publish tiles to gh-pages
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+      # 6️⃣ Configure git user for commits
+      - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # checkout or create gh-pages
-          git checkout gh-pages || git checkout --orphan gh-pages
-
-          rm -rf tiles
-          mkdir -p tiles
-          mv out/tiles/* tiles/ 2>/dev/null || echo "No tiles to move"
-
-          # commit only if there are changes
-          if [ -n "$(git status --porcelain)" ]; then
-            git add tiles
-            git commit -m "Updated tiles from offline PBF"
-            git push -f "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}" gh-pages
-          else
-            echo "No changes to commit"
-          fi
+      # 7️⃣ Commit and push generated tiles to gh-pages branch
+      - name: Commit and push tiles
+        run: |
+          git checkout -B gh-pages || git checkout gh-pages
+          git add out/tiles
+          git add out/generate_summary.json
+          git commit -m "Updated tiles from offline PBF" || echo "No changes to commit"
+          git push -u origin gh-pages --force
