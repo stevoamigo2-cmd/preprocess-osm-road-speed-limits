@@ -80,7 +80,7 @@ function inferSpeedFromHighway(highway) {
 // Run osmium to convert ways to GeoJSON line features
 console.log('Extracting ways to GeoJSON...');
 const geojsonFile = path.join(__dirname, 'uk_highways_max.geojson');
-execSync(`osmium export ${PBF_FILE} -o ${geojsonFile} --geometry-types lines --tags highway,maxspeed`, { stdio: 'inherit' });
+execSync(`osmium export ${PBF_FILE} -o ${geojsonFile} --geometry-types lines --tag-filter highway,maxspeed`, { stdio: 'inherit' });
 
 // Read GeoJSON
 const geojson = JSON.parse(fs.readFileSync(geojsonFile, 'utf8'));
