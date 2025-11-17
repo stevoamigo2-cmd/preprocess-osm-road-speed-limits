@@ -14,11 +14,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set git identity
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "actions@github.com"
-
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
@@ -32,22 +27,18 @@ jobs:
           OVERPASS_ENDPOINT: "https://overpass-api.de/api/interpreter"
           TILE_ZOOM: "15"
           THROTTLE_MS: "1200"
-        run: |
-          node preprocess_osm.js
+        run: node preprocess_osm.js
 
-      - name: Publish tiles to gh-pages
+      - name: Commit tiles to gh-pages
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          git clone --depth 1 https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} repo
-          cd repo
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
 
-          git checkout gh-pages || git checkout --orphan gh-pages
-          mkdir -p tiles
-          rm -rf tiles/* || true
+          git checkout --orphan gh-pages || git checkout gh-pages
+          git rm -rf tiles || echo "No old tiles"
 
-          cp -R ../out/tiles/* tiles/
-
-          git add -A
+          git add -A tiles
           git commit -m "Update tiles from GH Action" || echo "No changes to commit"
-          git push -f origin gh-pages
+          git push -f https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} gh-pages
