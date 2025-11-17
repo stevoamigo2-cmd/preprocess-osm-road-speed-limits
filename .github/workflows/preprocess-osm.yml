@@ -23,10 +23,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Download UK OSM PBF from Release
+      - name: Download PBF
         run: |
-          curl -L -o uk_highways_max.osm.pbf \
-          "https://github.com/stevoamigo2-cmd/preprocess-osm-road-speed-limits/releases/download/v1.0.0/uk_highways_max.osm.pbf"
+          curl -L -o uk_highways_max.osm.pbf https://github.com/stevoamigo2-cmd/preprocess-osm-road-speed-limits/releases/download/<TAG>/uk_highways_max.osm.pbf
+
 
       - name: Generate tiles from local PBF (NO OVERPASS)
         run: node generate_tiles_from_pbf.js uk_highways_max.osm.pbf
