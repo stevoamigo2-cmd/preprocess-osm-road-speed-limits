@@ -77,10 +77,20 @@ function inferSpeedFromHighway(highway) {
   }
 }
 
-// Run osmium to convert ways to GeoJSON line features
-console.log('Extracting ways to GeoJSON...');
+// Run osmium to filter PBF to only highway/maxspeed ways, then export to GeoJSON
+console.log('Filtering PBF to ways with highway or maxspeed tags (creates a smaller PBF)...');
+const filteredPbf = path.join(__dirname, 'uk_highways_max.filtered.osm.pbf');
+// Use osmium tags-filter (supported across many osmium versions)
+execSync(`osmium tags-filter ${PBF_FILE} w/highway w/maxspeed -o ${filteredPbf}`, { stdio: 'inherit' });
+
+console.log('Exporting filtered PBF to GeoJSON (lines)...');
 const geojsonFile = path.join(__dirname, 'uk_highways_max.geojson');
-execSync(`osmium export ${PBF_FILE} -o ${geojsonFile} --geometry-types lines --tag-filter highway,maxspeed`, { stdio: 'inherit' });
+// Export filtered PBF to GeoJSON — use -f geojson to be explicit about format
+execSync(`osmium export ${filteredPbf} -o ${geojsonFile} -f geojson --geometry-types lines`, { stdio: 'inherit' });
+
+// (optional) remove the filtered intermediate PBF to save disk
+try { fs.unlinkSync(filteredPbf); } catch(e) { /* ignore */ }
+
 
 // Read GeoJSON
 const geojson = JSON.parse(fs.readFileSync(geojsonFile, 'utf8'));
