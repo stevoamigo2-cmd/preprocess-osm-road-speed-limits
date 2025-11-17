@@ -1,51 +1,42 @@
-name: Build & Deploy UK Speed Limit Tiles
+name: Generate OSM Speed Tiles (Offline PBF)
 
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: "0 2 * * *" # daily 2am
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
       - name: Install dependencies
         run: npm install
 
-      # ⚠️ If your PBF is too large to commit, download it here
-      - name: Download UK PBF
+      - name: Download UK OSM PBF from Release
+        run: curl -L -o uk_highways_max.osm.pbf \
+          "https://github.com/stevoamigo2-cmd/preprocess-osm-road-speed-limits/releases/download/v1.0.0/uk_highways_max.osm.pbf"
+
+      - name: Generate tiles from local PBF (NO OVERPASS)
+        run: node generate_tiles_from_pbf.js uk_highways_max.osm.pbf
+
+      - name: Publish tiles to gh-pages
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          if [ ! -f uk_highways_max.osm.pbf ]; then
-            echo "PBF missing, downloading..."
-            curl -L -o uk_highways_max.osm.pbf "YOUR_PUBLIC_PBF_URL"
-          else
-            echo "Using committed uk_highways_max.osm.pbf"
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
 
-      - name: Generate tiles from PBF
-        run: node generate_tiles_from_pbf.js 13
+          git checkout gh-pages || git checkout --orphan gh-pages
 
-      - name: Upload ZIP as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tiles_z13
-          path: tiles_z13.zip
+          rm -rf tiles
+          mv out/tiles tiles
 
-      - name: Deploy tiles.zip to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./
-          publish_branch: gh-pages
-          keep_files: false
-          exclude_assets: |
-            !tiles_z13.zip
+          git add tiles
+          git commit -m "Updated tiles from offline PBF" || echo "No changes"
+          git push -f "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}" gh-pages
