@@ -1,44 +1,42 @@
-name: OSM Tile Preprocessor
+name: Preprocess OSM Tiles
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
-    - cron: '0 2 * * *'
-  push:
-    paths:
-      - 'regions/**'
+    - cron: "0 0 * * 0" # weekly (Sunday)
 
 jobs:
-  build-and-run:
+  build:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    permissions:
+      contents: write
 
-      - name: Use Node.js
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Run preprocessor
-        env:
-          OVERPASS_ENDPOINT: "https://overpass-api.de/api/interpreter"
-          TILE_ZOOM: "15"
-          THROTTLE_MS: "1200"
-        run: node preprocess_osm.js
-
-      - name: Commit tiles to gh-pages
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+      - name: Run OSM Preprocess (Zoom 13)
         run: |
+          npm install
+          node preprocess_osm.js 13  # 👈 THIS SETS ZOOM=13
+
+      - name: Prepare gh-pages branch
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
 
-          git checkout --orphan gh-pages || git checkout gh-pages
-          git rm -rf tiles || echo "No old tiles"
+          git fetch
+          git switch --force-create gh-pages || git switch gh-pages
 
-          git add -A tiles
-          git commit -m "Update tiles from GH Action" || echo "No changes to commit"
-          git push -f https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} gh-pages
+          rm -rf tiles
+          mkdir tiles
+          cp -r out/tiles/* tiles/
+
+          git add .
+          git commit -m "Update tiles z13 from GH Action" || echo "No changes"
+          git push --force origin gh-pages
