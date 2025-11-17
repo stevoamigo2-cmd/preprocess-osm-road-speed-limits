@@ -2,7 +2,6 @@
 // generate_tiles_from_pbf.js
 // Usage: node generate_tiles_from_pbf.js <pbf-file> [zoom]
 // Produces: out/tiles/<zoom>/<x>/<y>.json with minimal feature objects.
-// Strategy: try to ensure ways have node coordinates using available osmium features.
 
 const fs = require('fs');
 const path = require('path');
@@ -60,15 +59,12 @@ function runSync(cmd, args, opts = {}) {
 
 console.log('1) Filtering PBF to ways with highway or maxspeed tags (creates):', filteredPbf);
 
-// Try tags-filter with --add-missing-nodes first (if osmium supports it)
 let triedAddMissingNodes = false;
 let didFilter = false;
 let res;
 
 res = runSync('osmium', ['--version']);
-if (res.status !== 0) {
-  console.warn('Warning: osmium-tool not found or not on PATH. Ensure osmium-tool installed.');
-}
+if (res.status !== 0) console.warn('Warning: osmium-tool not found or not on PATH.');
 
 try {
   console.log(' -> attempt: osmium tags-filter ... --add-missing-nodes');
@@ -82,17 +78,10 @@ try {
     filteredPbf,
     '--add-missing-nodes'
   ], { stdio: 'inherit' });
-  if (res.status === 0) {
-    console.log('tags-filter + --add-missing-nodes succeeded.');
-    didFilter = true;
-  } else {
-    console.log('tags-filter + --add-missing-nodes failed (status ' + res.status + '), stderr:\n' + res.stderr);
-  }
-} catch (e) {
-  console.log('tags-filter + --add-missing-nodes attempt raised:', e && e.message);
-}
+  if (res.status === 0) { didFilter = true; console.log('tags-filter + --add-missing-nodes succeeded.'); }
+  else console.log('tags-filter + --add-missing-nodes failed (status ' + res.status + '), stderr:\n' + res.stderr);
+} catch (e) { console.log('tags-filter + --add-missing-nodes attempt raised:', e && e.message); }
 
-// If not done, try plain tags-filter (nodes may not be present)
 if (!didFilter) {
   try {
     console.log(' -> attempt: osmium tags-filter (without add-missing-nodes)');
@@ -104,15 +93,9 @@ if (!didFilter) {
       '-o',
       filteredPbf
     ], { stdio: 'inherit' });
-    if (res.status === 0) {
-      console.log('tags-filter succeeded (no add-missing-nodes).');
-      didFilter = true;
-    } else {
-      console.log('tags-filter failed (status ' + res.status + '), stderr:\n' + res.stderr);
-    }
-  } catch (e) {
-    console.log('tags-filter attempt raised:', e && e.message);
-  }
+    if (res.status === 0) { didFilter = true; console.log('tags-filter succeeded (no add-missing-nodes).'); }
+    else console.log('tags-filter failed (status ' + res.status + '), stderr:\n' + res.stderr);
+  } catch (e) { console.log('tags-filter attempt raised:', e && e.message); }
 }
 
 if (!didFilter) {
@@ -120,53 +103,40 @@ if (!didFilter) {
   process.exit(4);
 }
 
-// If we used tags-filter without add-missing-nodes, try to reconstruct node locations with add-locations (if available)
+// === PATCHED: Use add-locations-to-ways instead of old add-locations ===
 let usePbfForExport = filteredPbf;
-if (didFilter && triedAddMissingNodes) {
-  // nodes already added in the filtering step; we can export filteredPbf directly
-  usePbfForExport = filteredPbf;
-} else {
-  // try osmium add-locations (some versions provide it)
-  console.log('2) Attempting to reconstruct way geometry with osmium add-locations ->', withNodesPbf);
+if (!triedAddMissingNodes || !didFilter) {
+  // fallback: try add-locations-to-ways to reconstruct geometry
+  console.log('2) Attempting to reconstruct way geometry with osmium add-locations-to-ways ->', withNodesPbf);
   res = runSync('osmium', ['add-locations-to-ways', filteredPbf, '-o', withNodesPbf]);
   if (res.status === 0) {
-    console.log('osmium add-locations succeeded.');
+    console.log('osmium add-locations-to-ways succeeded.');
     usePbfForExport = withNodesPbf;
   } else {
-    console.log('osmium add-locations unavailable/failed (status ' + res.status + '), stderr:\n' + res.stderr);
-    // try osmium export with --with-nodes option (some versions support)
-    console.log(' -> Trying osmium export with --with-nodes fallback (no intermediate withnodes pbf).');
-    // we'll set usePbfForExport = filteredPbf and ask export to include nodes; downstream export will try --with-nodes
-    usePbfForExport = filteredPbf;
+    console.log('osmium add-locations-to-ways unavailable/failed (status ' + res.status + '), stderr:\n' + res.stderr);
+    usePbfForExport = filteredPbf; // fallback
   }
 }
 
-// Now stream osmium export -> geojsonseq and process line-by-line
 console.log('3) Streaming export from osmium -> geojsonseq (processing features)...');
 
 const exportArgsPrimary = ['export', usePbfForExport, '-f', 'geojsonseq'];
-const exportArgsWithNodes = exportArgsPrimary.concat(['--with-nodes']); // try with-nodes if supported
+const exportArgsWithNodes = exportArgsPrimary.concat(['--with-nodes']); 
 
-// Choose which to spawn by testing whether --with-nodes works
 let exportCmdArgs = exportArgsPrimary;
 let testRes = runSync('osmium', exportArgsWithNodes);
 if (testRes.status === 0) {
   exportCmdArgs = exportArgsWithNodes;
   console.log('Using osmium export with --with-nodes.');
-} else {
-  // fallback to plain export (if nodes were added earlier via tags-filter --add-missing-nodes or add-locations, plain export is fine)
-  exportCmdArgs = exportArgsPrimary;
-  console.log('Using plain osmium export (no --with-nodes).');
-}
+} else console.log('Using plain osmium export (no --with-nodes).');
 
-// spawn streaming export
 const osmium = spawn('osmium', exportCmdArgs, { stdio: ['ignore', 'pipe', 'inherit'] });
 
 let buffer = '';
 let totalFeatures = 0, processedFeatures = 0, skippedNoGeom = 0, skippedBadGeom = 0;
-let firstFeatureLogged = false;
 const touchedTiles = new Set();
 const sampleTiles = [];
+let firstFeatureLogged = false;
 
 function flushBufferLines() {
   const lines = buffer.split(/\r?\n/);
@@ -177,16 +147,11 @@ function flushBufferLines() {
     try {
       const feat = JSON.parse(line);
       if (!firstFeatureLogged) {
-        try {
-          fs.writeFileSync(path.join(__dirname, 'out', 'sample_first_feature.json'), JSON.stringify(feat, null, 2));
-          console.log('WROTE out/sample_first_feature.json for inspection');
-        } catch (e) {}
+        try { fs.writeFileSync(path.join(__dirname, 'out', 'sample_first_feature.json'), JSON.stringify(feat, null, 2)); } catch (e){}
         firstFeatureLogged = true;
       }
       processFeature(feat);
-    } catch (e) {
-      // skip parse errors
-    }
+    } catch (e) {}
   }
 }
 
@@ -194,7 +159,6 @@ function processFeature(feat) {
   if (!feat || feat.type !== 'Feature' || !feat.geometry) { skippedNoGeom++; return; }
 
   const props = feat.properties || {};
-  // detect tags in several possible places
   let tags = props.tags || props.tag || null;
   if (!tags) {
     tags = {};
@@ -214,29 +178,14 @@ function processFeature(feat) {
   const coords = [];
 
   try {
-    if (geom.type === 'LineString') {
-      for (const pt of geom.coordinates) {
-        if (!Array.isArray(pt) || pt.length < 2) continue;
-        coords.push([pt[1], pt[0]]); // geojson [lon,lat] -> [lat,lon]
-      }
-    } else if (geom.type === 'MultiLineString') {
-      for (const line of geom.coordinates) for (const pt of line) coords.push([pt[1], pt[0]]);
-    } else if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
-      for (const g of geom.geometries) {
-        if (g && g.type === 'LineString') for (const pt of g.coordinates) coords.push([pt[1], pt[0]]);
-      }
-    } else {
-      skippedBadGeom++;
-      return;
-    }
-  } catch (e) {
-    skippedBadGeom++;
-    return;
-  }
+    if (geom.type === 'LineString') for (const pt of geom.coordinates) coords.push([pt[1], pt[0]]);
+    else if (geom.type === 'MultiLineString') for (const line of geom.coordinates) for (const pt of line) coords.push([pt[1], pt[0]]);
+    else if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) for (const g of geom.geometries) if (g && g.type === 'LineString') for (const pt of g.coordinates) coords.push([pt[1], pt[0]]);
+    else { skippedBadGeom++; return; }
+  } catch (e) { skippedBadGeom++; return; }
 
   if (!coords.length) { skippedNoGeom++; return; }
 
-  // pick tiles touched
   const tilesTouched = new Set();
   for (const p of coords) {
     const lat = p[0], lon = p[1];
@@ -268,22 +217,11 @@ function processFeature(feat) {
   processedFeatures++;
 }
 
-osmium.stdout.on('data', (chunk) => {
-  buffer += chunk.toString('utf8');
-  flushBufferLines();
-});
+osmium.stdout.on('data', (chunk) => { buffer += chunk.toString('utf8'); flushBufferLines(); });
 
 osmium.on('close', (code) => {
   if (buffer && buffer.trim()) {
-    try {
-      const last = JSON.parse(buffer);
-      processFeature(last);
-    } catch (e) {}
-  }
-
-  if (code !== 0) {
-    console.error('osmium export exited with code', code);
-    // continue to finalization - it might have still produced output
+    try { processFeature(JSON.parse(buffer)); } catch (e) {}
   }
 
   console.log('Stream finished. Totals:');
@@ -292,16 +230,8 @@ osmium.on('close', (code) => {
   console.log('  skippedNoGeom:', skippedNoGeom, 'skippedBadGeom:', skippedBadGeom);
   console.log('  touchedTiles count:', touchedTiles.size);
 
-  if (touchedTiles.size === 0) {
-    console.warn('No tiles were touched. Possible causes: filtered PBF has no way geometries OR feature geometry/tags are in an unexpected shape.');
-    try {
-      const stat = fs.statSync(filteredPbf);
-      console.log('Filtered PBF size:', (stat.size / (1024*1024)).toFixed(1), 'MB');
-    } catch (e) {}
-    // write summary and exit
-  }
+  if (touchedTiles.size === 0) console.warn('No tiles were touched. Filtered PBF may have missing node geometry.');
 
-  // Convert ndjson -> final JSON tile files
   for (const tkey of Array.from(touchedTiles)) {
     const [tx, ty] = tkey.split('/');
     const ndPath = path.join(__dirname, 'out', 'tiles', String(ZOOM), tx, `${ty}.ndjson`);
@@ -319,26 +249,18 @@ osmium.on('close', (code) => {
         features: arr
       }, null, 2), 'utf8');
       fs.unlinkSync(ndPath);
-    } catch (e) {
-      console.warn('Failed converting ndjson for', tkey, e && e.message);
-    }
+    } catch (e) { console.warn('Failed converting ndjson for', tkey, e && e.message); }
   }
 
-  // write debug summary
   const summary = {
     timestamp: new Date().toISOString(),
-    strategy: {
-      triedAddMissingNodes,
-      usedPbfForExport: usePbfForExport,
-      exportArgs: exportCmdArgs
-    },
+    strategy: { triedAddMissingNodes, usedPbfForExport: usePbfForExport, exportArgs: exportCmdArgs },
     totals: { totalFeatures, processedFeatures, skippedNoGeom, skippedBadGeom, touchedTiles: touchedTiles.size },
     sampleTiles,
   };
   fs.writeFileSync(path.join(__dirname, 'out', 'generate_summary.json'), JSON.stringify(summary, null, 2));
   console.log('Wrote out/generate_summary.json');
 
-  // cleanup intermediate PBFs if present
   try { if (fs.existsSync(withNodesPbf)) fs.unlinkSync(withNodesPbf); } catch(e){}
   console.log('Done. Tiles in out/tiles/' + ZOOM);
 });
