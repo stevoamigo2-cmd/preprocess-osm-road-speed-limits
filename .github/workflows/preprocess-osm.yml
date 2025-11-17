@@ -38,7 +38,7 @@ jobs:
       - name: Run OSM Preprocess (Zoom 13)
         env:
           OVERPASS_ENDPOINT: "https://overpass-api.de/api/interpreter"
-          THROTTLE_MS: "1200"
+          THROTTLE_MS: "4000"
         run: |
           node preprocess_osm.js 13
 
