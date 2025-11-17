@@ -3,7 +3,7 @@ name: Preprocess OSM Tiles
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * 0" # weekly (Sunday)
+    - cron: "0 0 * * 0" # weekly Sunday
 
 permissions:
   contents: write
@@ -24,42 +24,67 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install deps (if package.json present)
+      - name: Install dependencies
         run: |
           if [ -f package.json ]; then npm install; fi
 
-      - name: Generate tile list for route
+      - name: Generate tile list for route (if needed)
         run: |
-          node tools/generate_tiles_bbox.js \
-          --bbox=49.8,-8.6,60.9,1.8 \
-          --zoom=13 \
-          --out=regions/tiles.json
+          if [ -f regions/route_points.json ]; then
+            node tools/generate_tiles_route_buffer.js \
+              --points=regions/route_points.json \
+              --zoom=13 \
+              --buffer=400 \
+              --out=regions/tiles.json
+          else
+            echo "No route_points.json found; skipping tile generation"
+          fi
 
-      - name: Run OSM Preprocess (Zoom 13)
+      - name: Run OSM Preprocess in batches
         env:
           OVERPASS_ENDPOINT: "https://overpass-api.de/api/interpreter"
-          THROTTLE_MS: "4000"
+          THROTTLE_MS: "5000"
         run: |
-          node preprocess_osm.js 13
+          node -e "
+          const fs = require('fs');
+          const path = require('path');
+          const { execSync } = require('child_process');
+
+          const TILE_Z = 13;
+          const BATCH_SIZE = 1000;
+          const tilesFile = path.join('regions', 'tiles.json');
+
+          if (!fs.existsSync(tilesFile)) {
+            console.error('regions/tiles.json not found!');
+            process.exit(1);
+          }
+
+          const allTiles = JSON.parse(fs.readFileSync(tilesFile, 'utf8'));
+          console.log('Total tiles:', allTiles.length);
+
+          for (let i = 0; i < allTiles.length; i += BATCH_SIZE) {
+            const batch = allTiles.slice(i, i + BATCH_SIZE);
+            fs.writeFileSync('regions/tiles_batch.json', JSON.stringify(batch, null, 2));
+            console.log('Processing batch', i/BATCH_SIZE + 1);
+
+            // Run preprocess_osm.js on this batch
+            execSync('node preprocess_osm.js ' + TILE_Z, { stdio: 'inherit' });
+          }
+          "
 
       - name: Prepare gh-pages branch and commit tiles
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
 
-          # clone current repo in a fresh dir (keeps working tree clean)
-          git fetch origin
-          # create or switch to gh-pages
           if git show-ref --verify --quiet refs/heads/gh-pages; then
             git switch gh-pages
           else
             git switch --create gh-pages
           fi
 
-          # remove existing tiles and copy new ones
           rm -rf tiles
           mkdir -p tiles
-          # if out/tiles exists, copy; otherwise warn
           if [ -d out/tiles ]; then
             cp -R out/tiles/* tiles/ || true
           else
@@ -67,5 +92,5 @@ jobs:
           fi
 
           git add -A
-          git commit -m "Update tiles z13 from GH Action" || echo "No changes to commit"
+          git commit -m 'Update tiles z13 from GH Action' || echo 'No changes'
           git push --force origin gh-pages
