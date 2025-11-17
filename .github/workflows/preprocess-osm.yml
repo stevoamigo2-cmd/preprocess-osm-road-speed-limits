@@ -41,4 +41,4 @@ jobs:
 
           git add -A tiles
           git commit -m "Update tiles from GH Action" || echo "No changes to commit"
-          git push -f https://x-access-token:${GH_PAT2}@github.com/${{ github.repository }} gh-pages
+          git push -f https://x-access-token:${GH_PAT}@github.com/${{ github.repository }} gh-pages
