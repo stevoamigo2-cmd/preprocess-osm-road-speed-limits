@@ -27,31 +27,48 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Download release asset (uk_highways_max.osm.pbf)
+    - name: Download release asset (private via API)
       id: get_asset
-      run: |
-        # Replace OWNER/REPO if the release asset is in another repo
-        REPO="${{ github.repository }}"
-        TAG="${{ github.event.release.tag_name || '' }}"
-        echo "repo=$REPO" > repo.txt
-        # find the asset id for uk_highways_max.osm.pbf in the latest release (or the triggered release)
-        GH_API="https://api.github.com/repos/${REPO}/releases"
-        if [ -n "$TAG" ]; then
-          REL_JSON=$(curl -sS -H "Accept: application/vnd.github+json" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$GH_API/tags/$TAG")
-        else
-          REL_JSON=$(curl -sS -H "Accept: application/vnd.github+json" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$GH_API/latest")
-        fi
-        ASSET_ID=$(echo "$REL_JSON" | jq -r '.assets[] | select(.name=="uk_highways_max.osm.pbf") | .id')
-        if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
-          echo "No release asset named uk_highways_max.osm.pbf found. Place the PBF in repo at data/uk_highways_max.osm.pbf or re-run with workflow_dispatch."
-          exit 1
-        fi
-        echo "asset_id=$ASSET_ID" >> $GITHUB_OUTPUT
-        # download
-        curl -sS -L -H "Accept: application/octet-stream" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/${REPO}/releases/assets/$ASSET_ID" -o data/uk_highways_max.osm.pbf
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        mkdir -p data
+        OUT_PATH="data/uk_highways_max.osm.pbf"
+        TMP_PATH="$(mktemp /tmp/uk_highways_max.osm.pbf.XXXXXX)"
+
+        REPO="stevoamigo2-cmd/preprocess-osm-road-speed-limits"
+        # specify a tag if you want a specific release, otherwise 'latest'
+        TAG="v1.0.0"
+
+        echo "Querying release $TAG in $REPO"
+        # get release by tag
+        REL_JSON=$(curl -sS -H "Accept: application/vnd.github+json" \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
+
+        ASSET_ID=$(echo "$REL_JSON" | jq -r '.assets[] | select(.name=="uk_highways_max.osm.pbf") | .id')
+        if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
+          echo "Asset not found in release ${TAG}"
+          exit 1
+        fi
+        echo "Asset id: $ASSET_ID"
+
+        DOWNLOAD_URL="https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}"
+
+        # Actual download (requires Accept header to get binary)
+        curl --fail --location --retry 5 --retry-delay 5 --max-time 600 \
+          -H "Accept: application/octet-stream" \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          "$DOWNLOAD_URL" --output "$TMP_PATH"
+
+        if [ ! -s "$TMP_PATH" ]; then
+          echo "Download failed or empty file"
+          exit 23
+        fi
+        mv "$TMP_PATH" "$OUT_PATH"
+        echo "Downloaded to $OUT_PATH"
+
 
     - name: Install Python packages
       run: |
