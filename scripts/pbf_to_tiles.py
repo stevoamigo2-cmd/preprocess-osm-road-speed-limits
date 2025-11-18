@@ -83,7 +83,8 @@ class WayHandler(osmium.SimpleHandler):
         # only ways with geometry and at least one node
         if not w.nodes or len(w.nodes) < 1:
             return
-        tags = {k:v for k,v in w.tags.items()}
+        tags = {t.k: t.v for t in w.tags}
+
         if 'highway' not in tags:
             return
         coords = [(n.location.lon, n.location.lat) for n in w.nodes if n.location.valid()]
