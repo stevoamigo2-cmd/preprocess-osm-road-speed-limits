@@ -17,7 +17,7 @@ jobs:
 
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
-      TAG: v1.1.0   # release tag that contains the PBF assets
+      TAG: v1.2.0   # release tag that contains the PBF assets
 
     steps:
       - name: Checkout repo
