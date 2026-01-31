@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 jobs:
   build-and-deploy:
@@ -12,32 +13,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        country: [fr,de,es,it,nl,be,ie,pt,se,no,dk,ch,at,pl,cz,hu,ro,bg,gr,us,ca,au,nz]
+        country: [pt] # test with pt, then add more countries
 
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
       TAG: v1.1.0   # release tag that contains the PBF assets
 
     steps:
-      # -------------------------------------------------
-      # Checkout repo (needed for scripts + gh-pages)
-      # -------------------------------------------------
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # -------------------------------------------------
-      # System deps
-      # -------------------------------------------------
-      - name: Install system dependencies
+      - name: Install system deps
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq build-essential libgeos-dev libxml2-dev
 
-      # -------------------------------------------------
-      # Python
-      # -------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
@@ -48,34 +40,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install osmium mercantile shapely pyproj
 
-      # -------------------------------------------------
-      # Country vars
-      # -------------------------------------------------
       - name: Set country variables
         run: |
           echo "COUNTRY=${{ matrix.country }}" >> $GITHUB_ENV
           echo "ASSET_NAME=${{ matrix.country }}_highways_max.osm.pbf" >> $GITHUB_ENV
 
-      # -------------------------------------------------
-      # Download PBF from release
-      # -------------------------------------------------
       - name: Download release asset
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p data
-
-          REL_JSON=$(curl -sS \
-            -H "Accept: application/vnd.github+json" \
+          REL_JSON=$(curl -sS -H "Accept: application/vnd.github+json" \
             -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
 
-          ASSET_ID=$(echo "$REL_JSON" | jq -r \
-            ".assets[] | select(.name==\"${ASSET_NAME}\") | .id")
-
+          ASSET_ID=$(echo "$REL_JSON" | jq -r ".assets[] | select(.name==\"${ASSET_NAME}\") | .id")
           if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
-            echo "❌ Asset ${ASSET_NAME} not found in ${TAG}, skipping."
+            echo "Asset ${ASSET_NAME} not found in ${TAG}, skipping."
             exit 0
           fi
 
@@ -84,10 +66,8 @@ jobs:
             -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}" \
             --output "data/${ASSET_NAME}"
+          echo "Downloaded to data/${ASSET_NAME}"
 
-      # -------------------------------------------------
-      # Generate tiles
-      # -------------------------------------------------
       - name: Generate Z13 tiles
         run: |
           mkdir -p generated_tiles
@@ -96,26 +76,30 @@ jobs:
             --country ${COUNTRY} \
             --zoom 13 \
             --out generated_tiles/tiles
-            
+          echo "Generator finished for ${COUNTRY}"
 
-      # -------------------------------------------------
-      # Deploy to gh-pages
-      # -------------------------------------------------
-      - name: Deploy tiles to GitHub Pages
+      # --- Deploy using actions-gh-pages (more reliable than manual git push) ---
+      - name: Prepare public folder
         run: |
-          set -e
-
-          git fetch origin gh-pages
-          git checkout gh-pages
-
+          # make sure public exists
+          mkdir -p public
+          # safe copy: copy contents (including hidden) from source dir into dest
           mkdir -p public/tiles/${COUNTRY}
-          cp -r generated_tiles/tiles/${COUNTRY}/* public/tiles/${COUNTRY}/
+          # The cp source/. dest/ pattern copies everything without failing on empty
+          cp -a generated_tiles/tiles/${COUNTRY}/. public/tiles/${COUNTRY}/ || true
 
-          git add public/tiles/${COUNTRY}
+          # debug listing so logs show what's being published
+          echo "Listing public/tiles/${COUNTRY} (top levels):"
+          ls -la public/tiles/${COUNTRY} || true
+          echo "Count files (3 levels):"
+          find public/tiles/${COUNTRY} -type f | wc -l || true
 
-          if git diff --cached --quiet; then
-            echo "No changes to commit for ${COUNTRY}"
-          else
-            git commit -m "Add Z13 tiles for ${COUNTRY}"
-            git push origin gh-pages
-          fi
+          # ensure nojekyll present
+          touch public/.nojekyll
+
+      - name: Publish to GitHub Pages (peaceiris)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GH_PAT }}   # recommended: create GH_PAT with repo + pages permissions
+          publish_dir: ./public
+          keep_files: true
