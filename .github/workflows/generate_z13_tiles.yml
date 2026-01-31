@@ -17,7 +17,7 @@ jobs:
         country: [fr,de,es,it,nl,be,ie,pt,se,no,dk,ch,at,pl,cz,hu,ro,bg,gr,us,ca,au,nz]
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
-      TAG: v1.0.0    # or the release tag where you uploaded all assets
+      TAG: v1.1.0    # or the release tag where you uploaded all assets
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
