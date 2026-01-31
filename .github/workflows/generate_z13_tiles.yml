@@ -1,9 +1,7 @@
-name: Generate Z13 Speed Tiles
+name: Generate Z13 Speed Tiles (matrix, no UK)
 
 on:
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: write
@@ -13,100 +11,91 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        country: [fr,de,es,it,nl,be,ie,pt,se,no,dk,ch,at,pl,cz,hu,ro,bg,gr,us,ca,au,nz]
+    env:
+      REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
+      TAG: v1.0.0    # or the release tag where you uploaded all assets
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    - name: Install system deps
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y build-essential libxml2-dev libgeos-dev
+      - name: Install system deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential libxml2-dev libgeos-dev jq
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    - name: Download release asset (private via API)
-      id: get_asset
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        set -euo pipefail
-        mkdir -p data
-        OUT_PATH="data/uk_highways_max.osm.pbf"
-        TMP_PATH="$(mktemp /tmp/uk_highways_max.osm.pbf.XXXXXX)"
+      - name: Set country vars
+        run: |
+          echo "COUNTRY=${{ matrix.country }}" >> $GITHUB_ENV
+          echo "ASSET_NAME=${{ matrix.country }}_highways_max.osm.pbf" >> $GITHUB_ENV
 
-        REPO="stevoamigo2-cmd/preprocess-osm-road-speed-limits"
-        # specify a tag if you want a specific release, otherwise 'latest'
-        TAG="v1.0.0"
+      - name: Download release asset (if present)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          OUT_PATH="data/${ASSET_NAME}"
+          TMP_PATH="$(mktemp /tmp/${ASSET_NAME}.XXXXXX)"
+          echo "Querying release ${TAG} in ${REPO} for asset ${ASSET_NAME}"
+          REL_JSON=$(curl -sS -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
 
-        echo "Querying release $TAG in $REPO"
-        # get release by tag
-        REL_JSON=$(curl -sS -H "Accept: application/vnd.github+json" \
-          -H "Authorization: token $GITHUB_TOKEN" \
-          "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
+          ASSET_ID=$(echo "$REL_JSON" | jq -r ".assets[] | select(.name==\"${ASSET_NAME}\") | .id")
+          if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
+            echo "Asset not found in release ${TAG} for ${ASSET_NAME}. Skipping this country."
+            exit 0
+          fi
+          DOWNLOAD_URL="https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}"
+          curl --fail --location --retry 5 --retry-delay 5 --max-time 600 \
+            -H "Accept: application/octet-stream" \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            "$DOWNLOAD_URL" --output "$TMP_PATH"
+          mv "$TMP_PATH" "$OUT_PATH"
+          echo "Downloaded to $OUT_PATH"
 
-        ASSET_ID=$(echo "$REL_JSON" | jq -r '.assets[] | select(.name=="uk_highways_max.osm.pbf") | .id')
-        if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
-          echo "Asset not found in release ${TAG}"
-          exit 1
-        fi
-        echo "Asset id: $ASSET_ID"
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install osmium mercantile shapely pyproj
 
-        DOWNLOAD_URL="https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}"
+      - name: Run pbf->tiles worker (do NOT write legacy)
+        run: |
+          mkdir -p generated_tiles
+          python3 scripts/pbf_to_tiles.py \
+            --pbf data/${ASSET_NAME} \
+            --country ${COUNTRY} \
+            --zoom 13 \
+            --out generated_tiles/tiles \
+            --verbosity INFO
 
-        # Actual download (requires Accept header to get binary)
-        curl --fail --location --retry 5 --retry-delay 5 --max-time 600 \
-          -H "Accept: application/octet-stream" \
-          -H "Authorization: token $GITHUB_TOKEN" \
-          "$DOWNLOAD_URL" --output "$TMP_PATH"
+      - name: Upload generated tiles artifact (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiles-${{ matrix.country }}
+          path: generated_tiles/tiles/${{ matrix.country }}
 
-        if [ ! -s "$TMP_PATH" ]; then
-          echo "Download failed or empty file"
-          exit 23
-        fi
-        mv "$TMP_PATH" "$OUT_PATH"
-        echo "Downloaded to $OUT_PATH"
+      - name: Merge to public dir
+        run: |
+          mkdir -p public
+          cp -r generated_tiles/tiles/* public/ || true
 
-
-    - name: Install Python packages
-      run: |
-        python -m pip install --upgrade pip
-        # python-osmium can be large but works on ubuntu-latest; mercantile for tile math; shapely for geometry
-        pip install osmium mercantile shapely pyproj
-
-    - name: Run pbf->tiles worker
-      run: |
-        mkdir -p generated_tiles
-        python3 scripts/pbf_to_tiles.py \
-          --pbf data/uk_highways_max.osm.pbf \
-          --zoom 13 \
-          --out generated_tiles/tiles \
-          --verbosity INFO
-
-    - name: List results
-      run: |
-        echo "Example files:"
-        find generated_tiles/tiles -maxdepth 3 -type f | head -n 20
-
-    - name: Deploy to GitHub Pages
-      uses: actions/configure-pages@v4
-
-    - name: Commit & publish tiles to gh-pages branch
-      run: |
-        # copy generated tiles into ./public for pages action
-        mkdir -p public
-        cp -r generated_tiles/tiles public/tiles
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        # Use pages action to publish 'public' directory
-      env:
-        GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-
-    - name: Publish to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v4
-      with:
-        github_token: ${{ secrets.GH_PAT }}
-        publish_dir: ./public
-        # optional: set keep_files: true if you want incremental
+  publish-pages:
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GH_PAT }}
+          publish_dir: ./public
+          keep_files: true
