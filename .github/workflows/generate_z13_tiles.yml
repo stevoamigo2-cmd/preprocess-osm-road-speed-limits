@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        country: [pt,it] # test with pt, then add more countries
+        country: [it] # test with pt, then add more countries
 
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
