@@ -5,11 +5,9 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -18,63 +16,106 @@ jobs:
 
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
-      TAG: v1.1.0
+      TAG: v1.1.0   # release tag that contains the PBF assets
 
     steps:
-      - uses: actions/checkout@v4
+      # -------------------------------------------------
+      # Checkout repo (needed for scripts + gh-pages)
+      # -------------------------------------------------
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - run: sudo apt-get update && sudo apt-get install -y jq libgeos-dev
+      # -------------------------------------------------
+      # System deps
+      # -------------------------------------------------
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq build-essential libgeos-dev libxml2-dev
 
-      - uses: actions/setup-python@v4
+      # -------------------------------------------------
+      # Python
+      # -------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: Set vars
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install osmium mercantile shapely pyproj
+
+      # -------------------------------------------------
+      # Country vars
+      # -------------------------------------------------
+      - name: Set country variables
         run: |
           echo "COUNTRY=${{ matrix.country }}" >> $GITHUB_ENV
-          echo "ASSET=${{ matrix.country }}_highways_max.osm.pbf" >> $GITHUB_ENV
+          echo "ASSET_NAME=${{ matrix.country }}_highways_max.osm.pbf" >> $GITHUB_ENV
 
-      - name: Download asset (skip if missing)
+      # -------------------------------------------------
+      # Download PBF from release
+      # -------------------------------------------------
+      - name: Download release asset
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           mkdir -p data
-          REL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-            https://api.github.com/repos/${REPO}/releases/tags/${TAG})
 
-          ID=$(echo "$REL" | jq -r ".assets[] | select(.name==\"$ASSET\") | .id")
-          [ -z "$ID" ] && exit 0
+          REL_JSON=$(curl -sS \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
 
-          curl -L -H "Authorization: token $GITHUB_TOKEN" \
+          ASSET_ID=$(echo "$REL_JSON" | jq -r \
+            ".assets[] | select(.name==\"${ASSET_NAME}\") | .id")
+
+          if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
+            echo "❌ Asset ${ASSET_NAME} not found in ${TAG}, skipping."
+            exit 0
+          fi
+
+          curl --fail --location \
             -H "Accept: application/octet-stream" \
-            https://api.github.com/repos/${REPO}/releases/assets/$ID \
-            -o data/$ASSET
+            -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}" \
+            --output "data/${ASSET_NAME}"
 
-      - run: pip install osmium mercantile shapely pyproj
-
-      - name: Generate tiles
+      # -------------------------------------------------
+      # Generate tiles
+      # -------------------------------------------------
+      - name: Generate Z13 tiles
         run: |
+          mkdir -p generated_tiles
           python scripts/pbf_to_tiles.py \
-            --pbf data/$ASSET \
-            --country $COUNTRY \
+            --pbf data/${ASSET_NAME} \
+            --country ${COUNTRY} \
             --zoom 13 \
-            --out generated_tiles/tiles
+            --out generated_tiles/tiles \
+            --verbosity INFO
 
-      - run: |
-          mkdir -p public
-          cp -r generated_tiles/tiles/* public/ || true
-
-  pages:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Disable Jekyll
+      # -------------------------------------------------
+      # Deploy to gh-pages
+      # -------------------------------------------------
+      - name: Deploy tiles to GitHub Pages
         run: |
-          mkdir -p public
-          touch public/.nojekyll
+          set -e
 
-      - uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GH_PAT }}
-          publish_dir: ./public
-          keep_files: true
+          git fetch origin gh-pages
+          git checkout gh-pages
+
+          mkdir -p public/tiles/${COUNTRY}
+          cp -r generated_tiles/tiles/${COUNTRY}/* public/tiles/${COUNTRY}/
+
+          git add public/tiles/${COUNTRY}
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit for ${COUNTRY}"
+          else
+            git commit -m "Add Z13 tiles for ${COUNTRY}"
+            git push origin gh-pages
+          fi
