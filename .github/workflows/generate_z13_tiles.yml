@@ -18,7 +18,7 @@ jobs:
 
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
-      TAG: v1.0.0
+      TAG: v1.1.0
 
     steps:
       - uses: actions/checkout@v4
