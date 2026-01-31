@@ -95,8 +95,8 @@ jobs:
             --pbf data/${ASSET_NAME} \
             --country ${COUNTRY} \
             --zoom 13 \
-            --out generated_tiles/tiles \
-            --verbosity INFO
+            --out generated_tiles/tiles
+            
 
       # -------------------------------------------------
       # Deploy to gh-pages
