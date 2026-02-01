@@ -77,12 +77,10 @@ class Handler(osmium.SimpleHandler):
         }
 
         for t in set(mercantile.tiles(minx, miny, maxx, maxy, [Z])):
-            key = (Z, t.x, t.y)
-            if key not in tile_files:
-                tile_files[key] = open(
-                    os.path.join(tmpdir, f"{Z}_{t.x}_{t.y}.ndjson"), "a"
-                )
-            tile_files[key].write(json.dumps(feature) + "\n")
+            fn = os.path.join(tmpdir, f"{Z}_{t.x}_{t.y}.ndjson")
+            with open(fn, "a") as f:
+                f.write(json.dumps(feature) + "\n")
+
 
 print(f"Reading {args.pbf}")
 Handler().apply_file(args.pbf, locations=True)
