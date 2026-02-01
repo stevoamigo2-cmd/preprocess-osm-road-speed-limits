@@ -1,4 +1,4 @@
-name: Generate Z13 Speed Tiles (matrix, no UK)
+name: Generate Z13 Speed Tiles (matrix chunks, no UK)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        country: [us] # test with pt, then add more countries
+        # Process each chunk as its own matrix entry (explicit chunk names)
+        chunk: [us_highways_max_west, us_highways_max_central, us_highways_max_east]
+      # Ensure only one matrix job runs at a time to avoid races on the same tiles folder
+      max-parallel: 1
 
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
@@ -40,12 +43,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install osmium mercantile shapely pyproj
 
-      - name: Set country variables
+      - name: Set variables for chunk
         run: |
-          echo "COUNTRY=${{ matrix.country }}" >> $GITHUB_ENV
-          echo "ASSET_NAME=${{ matrix.country }}_highways_max.osm.pbf" >> $GITHUB_ENV
+          # Output folder is always `us` so tiles go to generated_tiles/tiles/us/13/...
+          echo "COUNTRY=us" >> $GITHUB_ENV
+          # Asset name is chunk-specific (the release asset you uploaded)
+          echo "ASSET_NAME=${{ matrix.chunk }}.osm.pbf" >> $GITHUB_ENV
+          echo "CHUNK=${{ matrix.chunk }}" >> $GITHUB_ENV
 
-      - name: Download release asset
+      - name: Download release asset (chunk)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -55,20 +61,25 @@ jobs:
             -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
 
-          ASSET_ID=$(echo "$REL_JSON" | jq -r ".assets[] | select(.name==\"${ASSET_NAME}\") | .id")
+          # Find asset id for the exact chunk asset name
+          ASSET_ID=$(echo "$REL_JSON" | jq -r ".assets[] | select(.name==\"${ASSET_NAME}\") | .id" || true)
+
           if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
-            echo "Asset ${ASSET_NAME} not found in ${TAG}, skipping."
-            exit 0
+            echo "Asset ${ASSET_NAME} not found in release ${TAG}; skipping generation for this chunk."
+            echo "SKIP_GENERATION=true" >> $GITHUB_ENV
+          else
+            echo "Found asset id ${ASSET_ID} for ${ASSET_NAME}"
+            curl --fail --location \
+              -H "Accept: application/octet-stream" \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}" \
+              --output "data/${ASSET_NAME}"
+            echo "Downloaded to data/${ASSET_NAME}"
+            echo "SKIP_GENERATION=false" >> $GITHUB_ENV
           fi
 
-          curl --fail --location \
-            -H "Accept: application/octet-stream" \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            "https://api.github.com/repos/${REPO}/releases/assets/${ASSET_ID}" \
-            --output "data/${ASSET_NAME}"
-          echo "Downloaded to data/${ASSET_NAME}"
-
       - name: Generate Z13 tiles
+        if: env.SKIP_GENERATION != 'true'
         run: |
           mkdir -p generated_tiles
           python scripts/pbf_to_tiles.py \
@@ -76,16 +87,17 @@ jobs:
             --country ${COUNTRY} \
             --zoom 13 \
             --out generated_tiles/tiles
-          echo "Generator finished for ${COUNTRY}"
+          echo "Generator finished for chunk ${CHUNK} -> output country ${COUNTRY}"
 
       # --- Deploy using actions-gh-pages (more reliable than manual git push) ---
       - name: Prepare public folder
+        if: env.SKIP_GENERATION != 'true'
         run: |
           # make sure public exists
           mkdir -p public
           # safe copy: copy contents (including hidden) from source dir into dest
           mkdir -p public/tiles/${COUNTRY}
-          # The cp source/. dest/ pattern copies everything without failing on empty
+          # copy generated tiles into public folder (no-op if generator produced nothing)
           cp -a generated_tiles/tiles/${COUNTRY}/. public/tiles/${COUNTRY}/ || true
 
           # debug listing so logs show what's being published
