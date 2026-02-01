@@ -91,14 +91,14 @@ for f in tile_files.values():
     f.close()
 
 for fn in os.listdir(tmpdir):
-    z, x, y = fn.replace(".ndjson","").split("_")
+    z, x, y = fn.replace(".ndjson", "").split("_")
     with open(os.path.join(tmpdir, fn)) as r:
         features = [json.loads(l) for l in r]
 
     fc = {"type": "FeatureCollection", "features": features}
 
     # country path
-        out_c = os.path.join(OUT_COUNTRY, z, x)
+    out_c = os.path.join(OUT_COUNTRY, z, x)
     os.makedirs(out_c, exist_ok=True)
     out_path = os.path.join(out_c, f"{y}.json")
 
@@ -111,7 +111,7 @@ for fn in os.listdir(tmpdir):
         except Exception:
             existing_features = []
 
-        # Basic dedupe by properties.id (if present) to avoid duplicate ways across chunks
+        # Dedupe by OSM way id
         seen_ids = set()
         merged_features = []
 
@@ -121,7 +121,6 @@ for fn in os.listdir(tmpdir):
                 seen_ids.add(pid)
             merged_features.append(feat)
 
-        # Add new features, skip if id already seen
         for feat in features:
             pid = feat.get("properties", {}).get("id")
             if pid is not None and pid in seen_ids:
@@ -138,13 +137,13 @@ for fn in os.listdir(tmpdir):
         with open(out_path, "w", encoding="utf-8") as w:
             json.dump(fc, w)
 
-
     # legacy UK
     if args.write_legacy:
         out_l = os.path.join(OUT_BASE, z, x)
         os.makedirs(out_l, exist_ok=True)
         with open(os.path.join(out_l, f"{y}.json"), "w") as w:
             json.dump(fc, w)
+
 
 shutil.rmtree(tmpdir)
 print("Done:", OUT_COUNTRY)
