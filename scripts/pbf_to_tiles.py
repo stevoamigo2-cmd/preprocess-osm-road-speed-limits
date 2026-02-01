@@ -98,10 +98,46 @@ for fn in os.listdir(tmpdir):
     fc = {"type": "FeatureCollection", "features": features}
 
     # country path
-    out_c = os.path.join(OUT_COUNTRY, z, x)
+        out_c = os.path.join(OUT_COUNTRY, z, x)
     os.makedirs(out_c, exist_ok=True)
-    with open(os.path.join(out_c, f"{y}.json"), "w") as w:
-        json.dump(fc, w)
+    out_path = os.path.join(out_c, f"{y}.json")
+
+    # If an existing tile file is present, read and merge features
+    if os.path.exists(out_path):
+        try:
+            with open(out_path, "r", encoding="utf-8") as r:
+                existing = json.load(r)
+                existing_features = existing.get("features", [])
+        except Exception:
+            existing_features = []
+
+        # Basic dedupe by properties.id (if present) to avoid duplicate ways across chunks
+        seen_ids = set()
+        merged_features = []
+
+        for feat in existing_features:
+            pid = feat.get("properties", {}).get("id")
+            if pid is not None:
+                seen_ids.add(pid)
+            merged_features.append(feat)
+
+        # Add new features, skip if id already seen
+        for feat in features:
+            pid = feat.get("properties", {}).get("id")
+            if pid is not None and pid in seen_ids:
+                continue
+            merged_features.append(feat)
+            if pid is not None:
+                seen_ids.add(pid)
+
+        merged_fc = {"type": "FeatureCollection", "features": merged_features}
+        with open(out_path, "w", encoding="utf-8") as w:
+            json.dump(merged_fc, w)
+    else:
+        # No existing file — write normally
+        with open(out_path, "w", encoding="utf-8") as w:
+            json.dump(fc, w)
+
 
     # legacy UK
     if args.write_legacy:
