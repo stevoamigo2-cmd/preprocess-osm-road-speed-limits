@@ -1,0 +1,1 @@
+{"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[-102.588189, 44.313346], [-102.582584, 44.313313], [-102.576792, 44.313279], [-102.547733, 44.313296]]}, "properties": {"id": 9898478, "highway": "track", "maxspeed_raw": null, "maxspeed_mph": -1}}]}

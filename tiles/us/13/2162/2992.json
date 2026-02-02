@@ -1,0 +1,1 @@
+{"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[-84.9863101, 43.5673906], [-84.9866267, 43.5673901], [-84.9926436, 43.5673798], [-85.001538, 43.567349], [-85.006427, 43.56731]]}, "properties": {"id": 1080784195, "highway": "residential", "maxspeed_raw": null, "maxspeed_mph": -1}}]}
