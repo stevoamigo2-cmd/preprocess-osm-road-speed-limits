@@ -77,10 +77,12 @@ class Handler(osmium.SimpleHandler):
         }
 
         for t in set(mercantile.tiles(minx, miny, maxx, maxy, [Z])):
-            fn = os.path.join(tmpdir, f"{Z}_{t.x}_{t.y}.ndjson")
-            with open(fn, "a") as f:
-                f.write(json.dumps(feature) + "\n")
-
+            key = (Z, t.x, t.y)
+            if key not in tile_files:
+                tile_files[key] = open(
+                    os.path.join(tmpdir, f"{Z}_{t.x}_{t.y}.ndjson"), "a"
+                )
+            tile_files[key].write(json.dumps(feature) + "\n")
 
 print(f"Reading {args.pbf}")
 Handler().apply_file(args.pbf, locations=True)
@@ -89,7 +91,7 @@ for f in tile_files.values():
     f.close()
 
 for fn in os.listdir(tmpdir):
-    z, x, y = fn.replace(".ndjson", "").split("_")
+    z, x, y = fn.replace(".ndjson","").split("_")
     with open(os.path.join(tmpdir, fn)) as r:
         features = [json.loads(l) for l in r]
 
@@ -98,42 +100,8 @@ for fn in os.listdir(tmpdir):
     # country path
     out_c = os.path.join(OUT_COUNTRY, z, x)
     os.makedirs(out_c, exist_ok=True)
-    out_path = os.path.join(out_c, f"{y}.json")
-
-    # If an existing tile file is present, read and merge features
-    if os.path.exists(out_path):
-        try:
-            with open(out_path, "r", encoding="utf-8") as r:
-                existing = json.load(r)
-                existing_features = existing.get("features", [])
-        except Exception:
-            existing_features = []
-
-        # Dedupe by OSM way id
-        seen_ids = set()
-        merged_features = []
-
-        for feat in existing_features:
-            pid = feat.get("properties", {}).get("id")
-            if pid is not None:
-                seen_ids.add(pid)
-            merged_features.append(feat)
-
-        for feat in features:
-            pid = feat.get("properties", {}).get("id")
-            if pid is not None and pid in seen_ids:
-                continue
-            merged_features.append(feat)
-            if pid is not None:
-                seen_ids.add(pid)
-
-        merged_fc = {"type": "FeatureCollection", "features": merged_features}
-        with open(out_path, "w", encoding="utf-8") as w:
-            json.dump(merged_fc, w)
-    else:
-        # No existing file — write normally
-        with open(out_path, "w", encoding="utf-8") as w:
-            json.dump(fc, w)
+    with open(os.path.join(out_c, f"{y}.json"), "w") as w:
+        json.dump(fc, w)
 
     # legacy UK
     if args.write_legacy:
@@ -141,7 +109,6 @@ for fn in os.listdir(tmpdir):
         os.makedirs(out_l, exist_ok=True)
         with open(os.path.join(out_l, f"{y}.json"), "w") as w:
             json.dump(fc, w)
-
 
 shutil.rmtree(tmpdir)
 print("Done:", OUT_COUNTRY)
