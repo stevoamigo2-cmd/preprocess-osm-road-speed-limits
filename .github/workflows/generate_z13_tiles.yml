@@ -13,11 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        country: [se] # test with pt, then add more countries
+        country: [bg] # test with pt, then add more countries
 
     env:
       REPO: stevoamigo2-cmd/preprocess-osm-road-speed-limits
-      TAG: v2.0.0   # release tag that contains the PBF assets
+      TAG: v2.1.0   # release tag that contains the PBF assets
 
     steps:
       - name: Checkout repo
