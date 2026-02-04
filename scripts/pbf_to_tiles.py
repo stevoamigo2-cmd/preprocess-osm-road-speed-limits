@@ -40,7 +40,7 @@ if args.write_legacy:
     os.makedirs(OUT_BASE, exist_ok=True)
 
 tmpdir = tempfile.mkdtemp(prefix="tiles_")
-tile_files = {}
+
 
 def kmh_to_mph(v): return int(round(v * 0.621371))
 
@@ -77,18 +77,13 @@ class Handler(osmium.SimpleHandler):
         }
 
         for t in set(mercantile.tiles(minx, miny, maxx, maxy, [Z])):
-            key = (Z, t.x, t.y)
-            if key not in tile_files:
-                tile_files[key] = open(
-                    os.path.join(tmpdir, f"{Z}_{t.x}_{t.y}.ndjson"), "a"
-                )
-            tile_files[key].write(json.dumps(feature) + "\n")
+            fn = os.path.join(tmpdir, f"{Z}_{t.x}_{t.y}.ndjson")
+            with open(fn, "a", encoding="utf-8") as f:
+                f.write(json.dumps(feature) + "\n")
 
 print(f"Reading {args.pbf}")
 Handler().apply_file(args.pbf, locations=True)
 
-for f in tile_files.values():
-    f.close()
 
 for fn in os.listdir(tmpdir):
     z, x, y = fn.replace(".ndjson","").split("_")
