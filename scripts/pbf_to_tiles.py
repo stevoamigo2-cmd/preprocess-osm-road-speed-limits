@@ -28,6 +28,11 @@ parser.add_argument('--country', required=True)
 parser.add_argument('--zoom', type=int, default=13)
 parser.add_argument('--out', required=True)
 parser.add_argument('--write-legacy', action='store_true')
+
+# NEW (optional tuning)
+parser.add_argument('--flush', type=int, default=2000,
+                    help="Flush buffer to disk every N features per tile (default 2000)")
+
 args = parser.parse_args()
 
 COUNTRY = args.country.lower()
@@ -40,17 +45,36 @@ if args.write_legacy:
     os.makedirs(OUT_BASE, exist_ok=True)
 
 tmpdir = tempfile.mkdtemp(prefix="tiles_")
-tile_files = {}
 
-def kmh_to_mph(v): return int(round(v * 0.621371))
+# NEW: buffers per tile file (key = filename)
+tile_buffers = {}
+
+def kmh_to_mph(v): 
+    return int(round(v * 0.621371))
 
 def parse_speed(raw):
-    if not raw: return -1
+    if not raw: 
+        return -1
     r = raw.lower().strip()
     n = ''.join(c for c in r if c.isdigit() or c == '.')
-    if not n: return -1
+    if not n: 
+        return -1
     v = float(n)
     return int(round(v)) if ('mph' in r or COUNTRY == 'uk') else kmh_to_mph(v)
+
+def flush_tile(fn):
+    """Write buffered lines for one tile file."""
+    buf = tile_buffers.get(fn)
+    if not buf:
+        return
+    with open(fn, "a") as f:
+        f.write("".join(buf))
+    tile_buffers[fn] = []
+
+def flush_all():
+    """Flush all tile buffers to disk."""
+    for fn in list(tile_buffers.keys()):
+        flush_tile(fn)
 
 class Handler(osmium.SimpleHandler):
     def way(self, w):
@@ -76,20 +100,33 @@ class Handler(osmium.SimpleHandler):
             }
         }
 
+        line_json = json.dumps(feature) + "\n"
+
         for t in set(mercantile.tiles(minx, miny, maxx, maxy, [Z])):
             fn = os.path.join(tmpdir, f"{Z}_{t.x}_{t.y}.ndjson")
-            with open(fn, "a") as f:
-                f.write(json.dumps(feature) + "\n")
 
+            # NEW: buffer instead of open/write/close each time
+            buf = tile_buffers.get(fn)
+            if buf is None:
+                buf = []
+                tile_buffers[fn] = buf
+
+            buf.append(line_json)
+
+            # flush if this tile buffer is getting big
+            if len(buf) >= args.flush:
+                flush_tile(fn)
 
 print(f"Reading {args.pbf}")
 Handler().apply_file(args.pbf, locations=True)
 
-for f in tile_files.values():
-    f.close()
+# NEW: flush remaining buffers after reading PBF
+flush_all()
 
+# Convert NDJSON → FeatureCollection JSON tiles
 for fn in os.listdir(tmpdir):
-    z, x, y = fn.replace(".ndjson","").split("_")
+    z, x, y = fn.replace(".ndjson", "").split("_")
+
     with open(os.path.join(tmpdir, fn)) as r:
         features = [json.loads(l) for l in r]
 
