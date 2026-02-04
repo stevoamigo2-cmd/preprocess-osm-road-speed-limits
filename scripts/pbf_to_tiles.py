@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
 """
-pbf_to_tiles.py (FAST version, country-aware; legacy optional)
+pbf_to_tiles.py (FAST version with safe file handling)
 
-Usage:
-  python3 scripts/pbf_to_tiles.py \
-    --pbf data/fr_highways_max.osm.pbf \
-    --country fr \
-    --zoom 13 \
-    --out generated_tiles/tiles
-
-(UK legacy support)
-  python3 scripts/pbf_to_tiles.py \
-    --pbf data/uk_highways_max.osm.pbf \
-    --country uk \
-    --zoom 13 \
-    --out generated_tiles/tiles \
-    --write-legacy
+- Buffers features per tile and flushes in batches.
+- Does NOT keep thousands of file handles open (avoids Errno 24).
+- Args:
+    --flush      : how many features to buffer before flushing (default 5000)
+    --max-tiles  : max unique tile buffers before forcing a flush (default 4000)
 """
 
 import os, argparse, json, tempfile, shutil, gzip
@@ -33,6 +24,12 @@ parser.add_argument(
     default=5000,
     help="How many buffered features before flushing to disk",
 )
+parser.add_argument(
+    "--max-tiles",
+    type=int,
+    default=4000,
+    help="If buffered unique tiles exceed this, force a flush to avoid memory / FD growth",
+)
 args = parser.parse_args()
 
 COUNTRY = args.country.lower()
@@ -46,10 +43,7 @@ if args.write_legacy:
 
 tmpdir = tempfile.mkdtemp(prefix="tiles_")
 
-# Key=(z,x,y) -> gzip file handle (opened once, appended many times)
-open_files = {}
-
-# Key=(z,x,y) -> list[str] (json lines buffered)
+# buffers: key=(z,x,y) -> list[str] (json lines)
 buffers = {}
 
 ways_seen = 0
@@ -63,35 +57,25 @@ def kmh_to_mph(v):
 def parse_speed(raw):
     if not raw:
         return -1
-
     r = raw.lower().strip()
-
-    # Extract numeric part safely ("50", "50 mph", "50km/h", "50;60")
     num = ""
     for c in r:
         if c.isdigit() or c == ".":
             num += c
         elif num:
             break
-
     if not num:
         return -1
-
     try:
         v = float(num)
     except:
         return -1
-
-    # UK or mph tag -> keep mph
     if "mph" in r or COUNTRY == "uk":
         return int(round(v))
-
-    # otherwise assume km/h -> convert to mph
     return kmh_to_mph(v)
 
 
 def clamp_lat(lat):
-    # Mercator safe clamp
     if lat > 85.05112878:
         return 85.05112878
     if lat < -85.05112878:
@@ -100,7 +84,6 @@ def clamp_lat(lat):
 
 
 def get_tile_list_for_bounds(minx, miny, maxx, maxy):
-    # mercantile.tiles expects lon/lat bounds
     miny = clamp_lat(miny)
     maxy = clamp_lat(maxy)
     return mercantile.tiles(minx, miny, maxx, maxy, [Z])
@@ -109,33 +92,30 @@ def get_tile_list_for_bounds(minx, miny, maxx, maxy):
 def flush_buffers(force=False):
     """
     Flush buffered NDJSON lines to gzipped per-tile files.
-    This prevents:
-      - too many open files
-      - slowdowns from constantly opening/closing files
+    IMPORTANT: open -> write -> close each file to avoid too many open file descriptors.
     """
-    global buffers, open_files
+    global buffers
 
     if not buffers:
         return
 
+    # If not forced, check thresholds
     if not force:
         total_lines = sum(len(v) for v in buffers.values())
-        if total_lines < args.flush:
+        if total_lines < args.flush and len(buffers) < args.max_tiles:
             return
 
-    for key, lines in buffers.items():
+    # For each buffered tile, open gzip, append, then close immediately
+    for key, lines in list(buffers.items()):
+        if not lines:
+            continue
         z, x, y = key
         fn = os.path.join(tmpdir, f"{z}_{x}_{y}.ndjson.gz")
-
-        f = open_files.get(key)
-        if f is None:
-            # open once, append for the whole run
-            f = gzip.open(fn, "at", encoding="utf-8")
-            open_files[key] = f
-
-        f.writelines(lines)
-
-    buffers.clear()
+        # Open/append/close immediately. This keeps the number of open FDs tiny.
+        with gzip.open(fn, "at", encoding="utf-8") as f:
+            f.writelines(lines)
+        # free memory for this tile
+        buffers.pop(key, None)
 
 
 class Handler(osmium.SimpleHandler):
@@ -153,7 +133,6 @@ class Handler(osmium.SimpleHandler):
         miny = 999.0
         maxy = -999.0
 
-        # build coords + bounds without shapely (much faster)
         for n in w.nodes:
             if not n.location.valid():
                 continue
@@ -185,7 +164,7 @@ class Handler(osmium.SimpleHandler):
 
         js = json.dumps(feature, separators=(",", ":")) + "\n"
 
-        # Assign to all intersecting tiles
+        # assign to all intersecting tiles
         for t in get_tile_list_for_bounds(minx, miny, maxx, maxy):
             key = (t.z, t.x, t.y)
             if key not in buffers:
@@ -194,26 +173,20 @@ class Handler(osmium.SimpleHandler):
 
         ways_written += 1
 
-        # flush periodically
+        # flush periodically or when buffers get big
         if ways_seen % 2000 == 0:
             flush_buffers(force=False)
-            print(
-                f"[{COUNTRY}] ways_seen={ways_seen} ways_written={ways_written} open_tiles={len(open_files)}"
-            )
 
+        # If buffers grew too many unique tiles, force flush now
+        if len(buffers) >= args.max_tiles:
+            flush_buffers(force=True)
+            print(f"[{COUNTRY}] forced flush: unique_tiles now {len(buffers)} -> {len(buffers)} (should be 0)")
 
 print(f"Reading {args.pbf}")
 Handler().apply_file(args.pbf, locations=True)
 
-# final flush
+# final flush to ensure remaining buffers are written
 flush_buffers(force=True)
-
-# close all open gz files
-for f in open_files.values():
-    try:
-        f.close()
-    except:
-        pass
 
 print(f"Building final tile JSON files for {COUNTRY}...")
 
@@ -239,7 +212,7 @@ for fn in os.listdir(tmpdir):
     with open(os.path.join(tile_path_country, f"{y}.json"), "w", encoding="utf-8") as w:
         json.dump(fc, w)
 
-    # legacy output (UK old path)
+    # legacy output (UK)
     if args.write_legacy:
         tile_path_legacy = os.path.join(OUT_BASE, z, x)
         os.makedirs(tile_path_legacy, exist_ok=True)
